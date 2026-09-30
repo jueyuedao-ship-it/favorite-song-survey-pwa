@@ -40,6 +40,7 @@ import {
   candidates,
   songDetail,
 } from "./catalog";
+import { runResearchQueue } from "./research/runner";
 import { activeTags } from "./tags";
 import { statistics, jstToday } from "./statistics";
 
@@ -246,6 +247,7 @@ async function retryJob(request: Request, env: WorkerEnv, id: string) {
       )
         conflict("処理中です");
       const row = updated(before, {
+        ...(before.stage === "done" ? {stage:"search" as const,evidence:[],analysis:undefined,candidates:[],metadata_cursor:0,catalog_cursor:0}:{}),
         status: "queued",
         attempts: 0,
         last_error: null,
@@ -277,6 +279,8 @@ export function registerResearchRunner(
 ) {
   researchRunner = runner;
 }
+
+registerResearchRunner(runResearchQueue);
 
 async function route(request: Request, env: WorkerEnv): Promise<Response> {
   const url = new URL(request.url),
@@ -372,6 +376,16 @@ async function route(request: Request, env: WorkerEnv): Promise<Response> {
         url,
       ),
     );
+  }
+  const invite = path.match(/^\/admin\/invites\/([^/]+)$/);
+  if (invite && method === "DELETE") {
+    const actor = await authenticate(request, env, "admin"), body = await bodyOf(request);
+    requireKeys(body,["operation_id","expected_revision"]);
+    return replyMutation(env, actor, `DELETE:${path}`,body,async()=>{
+      const before=await getRow(env.DB,"invites",invite[1]); expectRevision(before,body);
+      const row=updated(before,{deleted_at:now()});
+      return {data:row,changes:[{table:"invites",before,after:row,action:"delete"}]};
+    });
   }
   const device = path.match(/^\/admin\/devices\/([^/]+)$/);
   if (device && method === "DELETE") {

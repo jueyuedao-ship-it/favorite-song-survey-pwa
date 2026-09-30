@@ -98,7 +98,56 @@ export interface ResearchResult extends Row {
   source_ids: string[];
   payload: Record<string, unknown>;
 }
+export interface ResearchEvidence {
+  id: string;
+  url: string;
+  title: string;
+  content: string;
+}
+export interface ResearchClaim {
+  name: string;
+  kind: Entity["kind"];
+  role: CreditRole;
+  source_id: string;
+  quote: string;
+  aliases: { name: string; quote: string }[];
+}
+export interface ResearchRecording {
+  original?: {
+    title: string;
+    reference_url: string;
+    source_id: string;
+    quote: string;
+  } | null;
+  title: string;
+  reference_url: string;
+  kind: VersionKind;
+  source_id: string;
+  quote: string;
+  credits: ResearchClaim[];
+  tags: {
+    tag_id: string;
+    source_id: string;
+    quote: string;
+    reasoning?: string;
+  }[];
+}
+export interface ResearchAnalysis {
+  recordings: ResearchRecording[];
+}
 export interface ResearchJob extends Row {
+  stage?:
+    | "search"
+    | "extract"
+    | "infer"
+    | "catalog"
+    | "metadata"
+    | "await_versions"
+    | "done";
+  evidence?: ResearchEvidence[];
+  analysis?: ResearchAnalysis;
+  metadata_cursor?: number;
+  catalog_cursor?: number;
   version_id: string | null;
   response_id: string | null;
   query: {

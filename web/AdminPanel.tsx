@@ -196,6 +196,15 @@ function ParticipantsAdmin({ api, token, onError, onNotice }: ChildProps) {
     } catch (reason) { onError(reason instanceof Error ? reason.message : "端末一覧を読み込めませんでした。"); }
   }
 
+  async function revokeInvite(invite: AnyRow) {
+    try {
+      onlineGuard();
+      const cancelled = await api.delete<AnyRow>(`/admin/invites/${encodeURIComponent(invite.id)}`, {operation_id:newOperationId(),expected_revision:invite.revision},token);
+      setInvites(current => current.map(item => item.id === invite.id ? {...item,...cancelled} : item));
+      onNotice("招待を取り消しました。");
+    } catch(reason) { onError(reason instanceof Error ? reason.message : "招待を取り消せませんでした。"); }
+  }
+
   async function revokeDevice(device: AnyRow) {
     try {
       onlineGuard();
@@ -229,7 +238,7 @@ function ParticipantsAdmin({ api, token, onError, onNotice }: ChildProps) {
       {devicesNextCursor && <button className="secondary-button" type="button" onClick={() => void showDevices(activeParticipant, devicesNextCursor, true)}>端末をもっと読み込む</button>}
     </section>}
     <section className="subsection"><h3>招待の状態</h3>
-      {invites.length ? <div className="table-scroll"><table><thead><tr><th>参加者</th><th>期限</th><th>使用状態</th></tr></thead><tbody>{invites.map((invite) => <tr key={invite.id}><td>{participants.find((person) => person.id === invite.participant_id)?.name ?? "参加者"}</td><td>{String(invite.expires_at)}</td><td>{invite.claimed_at ? "使用済み" : "未使用"}</td></tr>)}</tbody></table></div> : <p className="empty-state">招待履歴はありません。</p>}
+      {invites.length ? <div className="table-scroll"><table><thead><tr><th>参加者</th><th>期限</th><th>使用状態</th><th>操作</th></tr></thead><tbody>{invites.map((invite) => <tr key={invite.id}><td>{participants.find((person) => person.id === invite.participant_id)?.name ?? "参加者"}</td><td>{String(invite.expires_at)}</td><td>{invite.deleted_at ? "取り消し済み" : invite.claimed_at ? "使用済み" : String(invite.expires_at) < new Date().toISOString() ? "期限切れ" : "未使用"}</td><td>{!invite.deleted_at && !invite.claimed_at && String(invite.expires_at) > new Date().toISOString() && <button type="button" className="danger-button" onClick={() => void revokeInvite(invite)}>この招待を取り消す</button>}</td></tr>)}</tbody></table></div> : <p className="empty-state">招待履歴はありません。</p>}
       {invitesNextCursor && <button className="secondary-button" type="button" onClick={() => void loadInvites(invitesNextCursor, true)}>招待をもっと読み込む</button>}
     </section>
   </div>;

@@ -89,7 +89,8 @@ export function safeUrl(value: unknown) {
   } catch {
     invalid("URLが無効です");
   }
-  const host = url!.hostname.toLowerCase();
+  const host = url!.hostname.toLowerCase().replace(/\.+$/, "");
+  url!.hostname = host;
   if (
     url!.protocol !== "https:" ||
     url!.username ||
@@ -323,7 +324,7 @@ export function deletionGuards(
   return (relations[table] ?? []).map(([other, key]) =>
     check(
       db,
-      `NOT EXISTS(SELECT 1 FROM ${other} WHERE json_extract(data,'$.${key}')=? AND json_extract(data,'$.deleted_at') IS NULL)`,
+      `NOT EXISTS(SELECT 1 FROM ${other} WHERE json_extract(data,'$.${key}')=? AND json_extract(data,'$.deleted_at') IS NULL ${other === 'devices' ? "AND json_extract(data,'$.revoked_at') IS NULL" : other === 'invites' ? "AND json_extract(data,'$.claimed_at') IS NULL AND json_extract(data,'$.expires_at')>strftime('%Y-%m-%dT%H:%M:%fZ','now')" : ''})`,
       id,
     ),
   );
@@ -363,7 +364,8 @@ export async function candidates(
     allRows(db, "entities"),
     allRows(db, "aliases"),
   ]);
-  const query = q.trim().normalize("NFKC").toLocaleLowerCase("ja");
+  let query = q.trim().normalize("NFKC").toLocaleLowerCase("ja");
+  if (/^https:\/\//i.test(q)) { try { query = catalogUrl(q)!.toLocaleLowerCase("ja"); } catch {} }
   return versions
     .map((v) => ({
       ...v,
@@ -571,6 +573,7 @@ export async function recordMutation(
           table: "research_jobs",
           before: existing,
           after: updated(existing, {
+            stage: "search", evidence: [], analysis: undefined, metadata_cursor: 0, catalog_cursor:0,
             query: {
               title: row.unresolved_title!,
               artist_hint: row.artist_hint,
@@ -585,6 +588,10 @@ export async function recordMutation(
           }),
         });
       }
+    }
+    if (row.version_id || row.deleted_at) {
+      const existing = (await allRows(env.DB, "research_jobs")).find(j => j.response_id === row.id);
+      if (existing) changes.push({table:"research_jobs", before:existing, after:updated(existing,{deleted_at:now(), status:"failed", last_error:"STALE_JOB", candidates:[], lease_until:null})});
     }
     return {
       data: row,

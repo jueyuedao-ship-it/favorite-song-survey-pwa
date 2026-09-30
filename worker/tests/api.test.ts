@@ -1233,3 +1233,27 @@ async function registerAttempt(name: string, secret: string) {
     operation_id: op(),
   });
 }
+// Task 3 lifecycle regressions use the existing real-D1 HTTP harness.
+it('cancels unresolved lookup when owner resolves or deletes and refreshes evidence on query change',async()=>{
+ await register('Lifecycle',A); const s=await version(); const r=await record(A,null,'2026-09-29');
+ const jobs=()=>api('/admin/jobs','GET',undefined,admin); const initial=(await jobs()).data.items.find((j:any)=>j.response_id===r.data.id);
+ await db.prepare("UPDATE research_jobs SET data=json_set(data,'$.stage','infer','$.evidence',json('[{\"id\":\"old\"}]'),'$.candidates',json('[{\"id\":\"stale\"}]')) WHERE id=?").bind(initial.id).run();
+ const changed=await api(`/records/${r.data.id}`,'PATCH',{operation_id:op(),expected_revision:1,unresolved_title:'Another tune'},A);expect(changed.status).toBe(200);
+ const refreshed=(await jobs()).data.items.find((j:any)=>j.response_id===r.data.id);expect(refreshed.stage).toBe('search');expect(refreshed.evidence).toEqual([]);expect(refreshed.candidates).toEqual([]);
+ const resolved=await api(`/records/${r.data.id}`,'PATCH',{operation_id:op(),expected_revision:2,version_id:s.id},A);expect(resolved.status).toBe(200);
+ expect((await jobs()).data.items.some((j:any)=>j.response_id===r.data.id)).toBe(false);
+ const choices=await api(`/records/${r.data.id}/candidates`,'GET',undefined,A);expect(choices.data.candidates).toEqual([]);
+ const second=await record(A,null,'2026-09-30');expect((await api(`/records/${second.data.id}`,'DELETE',{operation_id:op(),expected_revision:1},A)).status).toBe(200);
+ expect((await jobs()).data.items.some((j:any)=>j.response_id===second.data.id)).toBe(false);
+ const exp=(await api('/admin/export','GET',undefined,admin)).data;expect(exp.tables.research_jobs.filter((j:any)=>j.response_id&&j.deleted_at)).toHaveLength(2);
+});
+it('cancels invitations and permits participant tombstone after revocation while preserving grant history',async()=>{
+ const p=await register('Remove grants',A);const invite=await api('/admin/invites','POST',{operation_id:op(),participant_id:p.id,invite_secret:INVITE},admin);
+ const device=(await api(`/admin/devices?participant_id=${p.id}`,'GET',undefined,admin)).data.items[0];
+ expect((await api(`/admin/participants/${p.id}`,'DELETE',{operation_id:op(),expected_revision:1},admin)).status).toBe(409);
+ const cancelled=await api(`/admin/invites/${invite.data.id}`,'DELETE',{operation_id:op(),expected_revision:1},admin);expect(cancelled.status).toBe(200);
+ expect((await api('/guest/claim','POST',{operation_id:op(),invite_secret:INVITE,device_label:'new',device_secret:B})).status).not.toBe(201);
+ expect((await api(`/admin/devices/${device.id}`,'DELETE',{operation_id:op(),expected_revision:1},admin)).status).toBe(200);
+ expect((await api(`/admin/participants/${p.id}`,'DELETE',{operation_id:op(),expected_revision:1},admin)).status).toBe(200);
+ const exp=(await api('/admin/export','GET',undefined,admin)).data;expect(exp.tables.devices[0].revoked_at).toBeTruthy();expect(exp.tables.invites[0].deleted_at).toBeTruthy();expect(exp.tables.participants[0].deleted_at).toBeTruthy();expect(exp.tables.audit.filter((a:any)=>a.action==='delete')).toHaveLength(3);
+});

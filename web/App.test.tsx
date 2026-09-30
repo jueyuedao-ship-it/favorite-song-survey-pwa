@@ -584,3 +584,14 @@ describe("管理と統計", () => {
     expect(screen.getByText(/複数のタグが付くため、割合の合計は100％を超えることがあります/)).toBeInTheDocument();
   });
 });
+it('管理者は招待を取り消せる', async () => {
+ const alice=participant('p-alice','葵');
+ const calls=installApi((url,init)=>{
+   if(url.pathname.endsWith('/admin/login'))return result({session_token:'memory-admin-token',expires_at:'2026-10-01T08:00:00Z'});
+   if(url.pathname.endsWith('/participants'))return result({items:[alice],next_cursor:null});
+   if(url.pathname.endsWith('/admin/invites'))return result({items:[{id:'cancel-invite',revision:1,participant_id:alice.id,expires_at:'2099-10-02T00:00:00Z',claimed_at:null,deleted_at:null}],next_cursor:null});
+   if(url.pathname.endsWith('/admin/invites/cancel-invite')&&init.method==='DELETE')return result({id:'cancel-invite',revision:2,deleted_at:'2026-10-01T00:00:00Z'});
+   return result({items:[],next_cursor:null});
+ });
+ const user=userEvent.setup();renderApp();await user.click(await screen.findByRole('button',{name:'管理者ログイン'}));await user.type(screen.getByLabelText('管理者パスワード'),'secret');await user.click(screen.getByRole('button',{name:'ログイン'}));await user.click(await screen.findByRole('button',{name:'管理画面'}));await user.click(await screen.findByRole('button',{name:'この招待を取り消す'}));await screen.findByText('取り消し済み');const call=calls.find(c=>c.url.pathname.endsWith('/admin/invites/cancel-invite'));expect(call?.init.method).toBe('DELETE');expect(JSON.parse(String(call?.init.body))).toMatchObject({expected_revision:1});
+});

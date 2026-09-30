@@ -10,19 +10,26 @@
     "typecheck": "tsc --noEmit",
     "build": "npm run build:api && npm run build:web",
     "build:api": "wrangler deploy --dry-run --outdir dist/worker",
-    "build:web": "node -e \"const fs=require('node:fs');if(fs.existsSync('web/index.html'))require('node:child_process').execFileSync(process.platform==='win32'?'npm.cmd':'npm',['exec','vite','--','build','--config','vite.config.ts'],{stdio:'inherit',shell:process.platform==='win32'});else console.log('Web build deferred until Task 2 creates web/index.html');\"",
+    "build:web": "vite build --config vite.config.ts",
     "db:migrate:local": "wrangler d1 migrations apply favorite-song-survey --local"
   },
   "dependencies": {
+    "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260930.2",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/node": "24.12.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "esbuild": "0.28.2",
+    "fake-indexeddb": "^6.2.5",
+    "jsdom": "^29.1.1",
     "miniflare": "5.20260926.1-alpha",
     "prettier": "3.8.3",
     "typescript": "5.9.3",

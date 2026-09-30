@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="好きな曲アンケート">
+  <rect width="512" height="512" rx="124" fill="#e7f0ff"/>
+  <circle cx="256" cy="256" r="177" fill="#ffffff" stroke="#2c68ad" stroke-width="22"/>
+  <circle cx="256" cy="256" r="126" fill="#d7e7ff"/>
+  <circle cx="256" cy="256" r="37" fill="#2c68ad"/>
+  <path d="M303 123v172c0 27-22 49-52 49-25 0-43-14-43-35 0-23 24-42 53-42 10 0 19 2 26 6V165l105-22v114c0 27-22 49-52 49-24 0-42-14-42-35 0-23 23-42 52-42 10 0 19 2 26 6v-68z" fill="#244f86"/>
+  <path d="M377 126c18 23 28 51 28 82" fill="none" stroke="#94b6e6" stroke-width="12" stroke-linecap="round"/>
+</svg>

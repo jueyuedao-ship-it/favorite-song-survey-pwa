@@ -1,0 +1,17 @@
+{
+  "id": "./",
+  "name": "好きな曲アンケート",
+  "short_name": "好きな曲",
+  "description": "好きな曲を記録して、みんなの人気曲と自分の傾向を見つけます。",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f5f8ff",
+  "theme_color": "#f4f8ff",
+  "icons": [
+    { "src": "./icons/icon.svg", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./icons/icon.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

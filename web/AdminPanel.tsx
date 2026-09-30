@@ -5,6 +5,7 @@ import { createApi } from "./api";
 import { inviteLink } from "./links";
 import { createSecret, newOperationId } from "./storage";
 import { InviteShare } from "./InviteShare";
+import { loadAllPages } from "./pagination";
 
 type SurveyApi = ReturnType<typeof createApi>;
 type AnyRow = Record<string, unknown> & { id: string; revision: number; deleted_at?: string | null };
@@ -33,11 +34,11 @@ const tableLabels: Record<EditableTable, string> = {
   sources: "情報源",
 };
 
-type Field = { key: string; label: string; type?: "text" | "textarea" | "select" | "checkbox" | "number"; options?: { value: string; label: string }[]; reference?: EditableTable; required?: boolean };
+type Field = { key: string; label: string; type?: "text" | "textarea" | "select" | "checkbox" | "number"; options?: { value: string; label: string }[]; reference?: EditableTable; required?: boolean; nullable?: boolean };
 
 function fieldsFor(table: EditableTable, refs: Partial<Record<EditableTable, NamedRow[]>>): Field[] {
-  const selectRef = (key: string, label: string, reference: EditableTable, value: (row: NamedRow) => string, required = true) => ({
-    key, label, type: "select" as const, reference, required,
+  const selectRef = (key: string, label: string, reference: EditableTable, value: (row: NamedRow) => string, required = true, nullable = false) => ({
+    key, label, type: "select" as const, reference, required, nullable,
     options: (refs[reference] ?? []).filter((row) => !row.deleted_at).map((row) => ({ value: row.id, label: value(row) })),
   });
   switch (table) {
@@ -47,8 +48,8 @@ function fieldsFor(table: EditableTable, refs: Partial<Record<EditableTable, Nam
       selectRef("work_id", "作品", "works", (row) => row.title ?? row.id),
       { key: "title", label: "歌唱・演奏版の名前", required: true },
       { key: "kind", label: "種別", type: "select", required: true, options: ["original", "cover", "remix", "other"].map((value) => ({ value, label: ({ original: "原曲", cover: "カバー", remix: "リミックス", other: "その他" } as Record<string, string>)[value] })) },
-      { key: "reference_url", label: "参照URL" },
-      selectRef("uploader_entity_id", "投稿チャンネル", "entities", (row) => row.name ?? row.id, false),
+      { key: "reference_url", label: "参照URL", nullable: true },
+      selectRef("uploader_entity_id", "投稿チャンネル", "entities", (row) => row.name ?? row.id, false, true),
     ];
     case "entities": return [
       { key: "name", label: "人物・グループ名", required: true },
@@ -59,7 +60,7 @@ function fieldsFor(table: EditableTable, refs: Partial<Record<EditableTable, Nam
       selectRef("version_id", "歌唱・演奏版", "versions", (row) => row.title ?? row.id),
       selectRef("entity_id", "人物・グループ", "entities", (row) => row.name ?? row.id),
       { key: "role", label: "役割", type: "select", required: true, options: ["vocalist", "composer", "release_name", "uploader"].map((value) => ({ value, label: ({ vocalist: "ボーカル", composer: "作曲者", release_name: "発表名義", uploader: "投稿チャンネル" } as Record<string, string>)[value] })) },
-      selectRef("source_id", "情報源", "sources", (row) => row.title ?? row.id, false),
+      selectRef("source_id", "情報源", "sources", (row) => row.title ?? row.id, false, true),
       { key: "confirmed", label: "確認済み", type: "checkbox" },
     ];
     case "tags": return [
@@ -72,7 +73,7 @@ function fieldsFor(table: EditableTable, refs: Partial<Record<EditableTable, Nam
       selectRef("version_id", "歌唱・演奏版", "versions", (row) => row.title ?? row.id),
       selectRef("tag_id", "タグ", "tags", (row) => row.name ?? row.id),
       { key: "evidence", label: "根拠", type: "textarea", required: true },
-      selectRef("source_id", "情報源", "sources", (row) => row.title ?? row.id, false),
+      selectRef("source_id", "情報源", "sources", (row) => row.title ?? row.id, false, true),
       { key: "origin", label: "登録元", type: "select", required: true, options: [{ value: "admin", label: "管理者" }, { value: "research", label: "調査" }] },
       { key: "confirmed", label: "確認済み", type: "checkbox" },
     ];
@@ -89,6 +90,14 @@ function fieldsFor(table: EditableTable, refs: Partial<Record<EditableTable, Nam
 
 function onlineGuard(): void {
   if (!navigator.onLine) throw new Error("管理者操作にはインターネット接続が必要です。接続後にもう一度お試しください。");
+}
+
+function loadAdminTable<T>(api: SurveyApi, table: BusinessTable, token: string, limit = 200): Promise<T[]> {
+  return loadAllPages((cursor) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (cursor) params.set("cursor", cursor);
+    return api.get<Page<T>>(`/admin/data/${table}?${params}`, { token });
+  });
 }
 
 export function AdminPanel({ api, token, onLogout }: Props) {
@@ -123,7 +132,9 @@ function ParticipantsAdmin({ api, token, onError, onNotice }: ChildProps) {
   const [name, setName] = useState("");
   const [activeParticipant, setActiveParticipant] = useState<string>("");
   const [devices, setDevices] = useState<AnyRow[]>([]);
+  const [devicesNextCursor, setDevicesNextCursor] = useState<string | null>(null);
   const [invites, setInvites] = useState<AnyRow[]>([]);
+  const [invitesNextCursor, setInvitesNextCursor] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -139,10 +150,18 @@ function ParticipantsAdmin({ api, token, onError, onNotice }: ChildProps) {
     finally { setLoading(false); }
   }, [api, onError, token]);
 
-  useEffect(() => { void loadParticipants(); }, [loadParticipants]);
-  useEffect(() => {
-    api.get<Page<AnyRow>>("/admin/invites?limit=100", { token }).then((data) => setInvites(data.items)).catch((reason: unknown) => onError(reason instanceof Error ? reason.message : "招待一覧を読み込めませんでした。"));
+  const loadInvites = useCallback(async (cursor?: string | null, append = false) => {
+    try {
+      const params = new URLSearchParams({ limit: "100" });
+      if (cursor) params.set("cursor", cursor);
+      const data = await api.get<Page<AnyRow>>(`/admin/invites?${params}`, { token });
+      setInvites((current) => append ? [...current, ...data.items] : data.items);
+      setInvitesNextCursor(data.next_cursor);
+    } catch (reason) { onError(reason instanceof Error ? reason.message : "招待一覧を読み込めませんでした。"); }
   }, [api, onError, token]);
+
+  useEffect(() => { void loadParticipants(); }, [loadParticipants]);
+  useEffect(() => { void loadInvites(); }, [loadInvites]);
 
   async function createParticipant(event: FormEvent) {
     event.preventDefault();
@@ -162,16 +181,18 @@ function ParticipantsAdmin({ api, token, onError, onNotice }: ChildProps) {
       await api.post<AnyRow>("/admin/invites", { operation_id: newOperationId(), participant_id: participantId, invite_secret: inviteSecret }, token);
       setShareLink(inviteLink(globalThis.location.href, inviteSecret));
       onNotice("招待を発行しました。使用されると再利用できません。");
-      const data = await api.get<Page<AnyRow>>("/admin/invites?limit=100", { token });
-      setInvites(data.items);
+      await loadInvites();
     } catch (reason) { onError(reason instanceof Error ? reason.message : "招待を発行できませんでした。"); }
   }
 
-  async function showDevices(participantId: string) {
+  async function showDevices(participantId: string, cursor?: string | null, append = false) {
     try {
-      const data = await api.get<Page<AnyRow>>(`/admin/devices?participant_id=${encodeURIComponent(participantId)}&limit=100`, { token });
+      const params = new URLSearchParams({ participant_id: participantId, limit: "100" });
+      if (cursor) params.set("cursor", cursor);
+      const data = await api.get<Page<AnyRow>>(`/admin/devices?${params}`, { token });
       setActiveParticipant(participantId);
-      setDevices(data.items);
+      setDevices((current) => append ? [...current, ...data.items] : data.items);
+      setDevicesNextCursor(data.next_cursor);
     } catch (reason) { onError(reason instanceof Error ? reason.message : "端末一覧を読み込めませんでした。"); }
   }
 
@@ -205,9 +226,11 @@ function ParticipantsAdmin({ api, token, onError, onNotice }: ChildProps) {
         <div><h4>{String(device.label ?? "端末")}</h4><p className="muted-note">{device.revoked_at ? "取り消し済み" : "利用中"} · {String(device.updated_at ?? device.created_at ?? "")}</p></div>
         {!device.revoked_at && <button className="danger-button" type="button" onClick={() => void revokeDevice(device)}>この端末を取り消す</button>}
       </article>)}</div> : <p className="empty-state">この参加者の端末はありません。</p>}
+      {devicesNextCursor && <button className="secondary-button" type="button" onClick={() => void showDevices(activeParticipant, devicesNextCursor, true)}>端末をもっと読み込む</button>}
     </section>}
     <section className="subsection"><h3>招待の状態</h3>
-      {invites.length ? <div className="table-scroll"><table><thead><tr><th>参加者ID</th><th>期限</th><th>使用状態</th></tr></thead><tbody>{invites.map((invite) => <tr key={invite.id}><td>{String(invite.participant_id)}</td><td>{String(invite.expires_at)}</td><td>{invite.claimed_at ? "使用済み" : "未使用"}</td></tr>)}</tbody></table></div> : <p className="empty-state">招待履歴はありません。</p>}
+      {invites.length ? <div className="table-scroll"><table><thead><tr><th>参加者</th><th>期限</th><th>使用状態</th></tr></thead><tbody>{invites.map((invite) => <tr key={invite.id}><td>{participants.find((person) => person.id === invite.participant_id)?.name ?? "参加者"}</td><td>{String(invite.expires_at)}</td><td>{invite.claimed_at ? "使用済み" : "未使用"}</td></tr>)}</tbody></table></div> : <p className="empty-state">招待履歴はありません。</p>}
+      {invitesNextCursor && <button className="secondary-button" type="button" onClick={() => void loadInvites(invitesNextCursor, true)}>招待をもっと読み込む</button>}
     </section>
   </div>;
 }
@@ -245,8 +268,8 @@ function AdminTableEditor({ api, token, onError, onNotice, initialTable, tables 
     const needed = [...new Set(referencesKey ? referencesKey.split(",") as EditableTable[] : [])];
     if (!needed.length) return;
     let live = true;
-    Promise.all(needed.map(async (reference) => [reference, await api.get<Page<NamedRow>>(`/admin/data/${reference}?limit=200`, { token })] as const))
-      .then((entries) => { if (live) setRefs((current) => ({ ...current, ...Object.fromEntries(entries.map(([key, value]) => [key, value.items])) })); })
+    Promise.all(needed.map(async (reference) => [reference, await loadAdminTable<NamedRow>(api, reference, token)] as const))
+      .then((entries) => { if (live) setRefs((current) => ({ ...current, ...Object.fromEntries(entries) })); })
       .catch((reason: unknown) => { if (live) onError(reason instanceof Error ? reason.message : "関連項目を読み込めませんでした。"); });
     return () => { live = false; };
   }, [api, onError, referencesKey, token]);
@@ -267,7 +290,11 @@ function AdminTableEditor({ api, token, onError, onNotice, initialTable, tables 
     event.preventDefault();
     try {
       onlineGuard();
-      const values = Object.fromEntries(fields.filter((field) => draft[field.key] !== "").map((field) => [field.key, draft[field.key]]));
+      const missing = fields.find((field) => field.required && (draft[field.key] === "" || draft[field.key] === null || draft[field.key] === undefined));
+      if (missing) throw new Error(`${missing.label}を入力してください。`);
+      const values = Object.fromEntries(fields
+        .filter((field) => draft[field.key] !== "" || Boolean(editingId && field.nullable))
+        .map((field) => [field.key, field.nullable && (draft[field.key] === "" || draft[field.key] === null) ? null : draft[field.key]]));
       const row = editingId ? rows.find((item) => item.id === editingId) : undefined;
       const body = editingId
         ? { operation_id: newOperationId(), expected_revision: row?.revision, values }
@@ -300,7 +327,7 @@ function AdminTableEditor({ api, token, onError, onNotice, initialTable, tables 
   }
 
   return <div className="admin-section">
-    <header className="list-toolbar"><label>対象テーブル<select aria-label="対象テーブル" value={table} onChange={(event) => { const next = event.target.value as EditableTable; if (next !== table) { setTable(next); setRows([]); setRefs({}); } }}>
+    <header className="list-toolbar"><label>対象テーブル<select aria-label="対象テーブル" value={table} onChange={(event) => { const next = event.target.value as EditableTable; if (next !== table) { setTable(next); setRows([]); setNextCursor(null); setRefs({}); setEditingId(null); setCreating(false); setDraft({}); } }}>
       {tables.map((item) => <option key={item} value={item}>{tableLabels[item]}</option>)}
     </select></label>
       <form className="search-form" onSubmit={(event) => { event.preventDefault(); void load(); }}><label>名前・内容を検索<input value={search} onChange={(event) => setSearch(event.target.value)} /></label><button className="secondary-button" type="submit">検索</button></form>
@@ -353,7 +380,7 @@ function DatabaseForms({ api, token, onError, onNotice }: ChildProps) {
     </select></label>
       <form className="search-form" onSubmit={(event) => { event.preventDefault(); void load(); }}><label>検索<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><button className="secondary-button" type="submit">検索</button></form>
     </header>
-    {editable.has(selected) ? <AdminTableEditor api={api} token={token} onError={onError} onNotice={onNotice} initialTable={selected as EditableTable} tables={[selected as EditableTable]} />
+    {editable.has(selected) ? <AdminTableEditor key={selected} api={api} token={token} onError={onError} onNotice={onNotice} initialTable={selected as EditableTable} tables={[selected as EditableTable]} />
       : rows.length ? <div className="table-scroll"><table><caption>{label}（参照のみ）</caption><thead><tr><th>ID</th><th>版</th><th>状態</th><th>内容</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><th scope="row">{row.id}</th><td>{row.revision}</td><td>{row.deleted_at ? "削除済み" : "有効"}</td><td><details><summary>詳細</summary><pre>{JSON.stringify(row, null, 2)}</pre></details></td></tr>)}</tbody></table></div>
         : <p className="empty-state">{loading ? "読み込んでいます…" : `${label}はありません。`}</p>}
     {nextCursor && !editable.has(selected) && <button type="button" className="secondary-button" onClick={() => void load(nextCursor, true)}>もっと読み込む</button>}
@@ -384,9 +411,13 @@ function AdminRecords({ api, token, onError, onNotice }: ChildProps) {
   useEffect(() => {
     void load();
     Promise.all([
-      api.get<Page<Participant>>("/admin/participants?limit=200", { token }),
-      api.get<Page<NamedRow>>("/admin/data/versions?limit=200", { token }),
-    ]).then(([people, versionsPage]) => { setParticipants(people.items); setVersions(versionsPage.items); }).catch((reason: unknown) => onError(reason instanceof Error ? reason.message : "回答の参照先を読み込めませんでした。"));
+      loadAllPages<Participant>((cursor) => {
+        const params = new URLSearchParams({ limit: "200" });
+        if (cursor) params.set("cursor", cursor);
+        return api.get<Page<Participant>>(`/admin/participants?${params}`, { token });
+      }),
+      loadAdminTable<NamedRow>(api, "versions", token),
+    ]).then(([people, versionRows]) => { setParticipants(people); setVersions(versionRows); }).catch((reason: unknown) => onError(reason instanceof Error ? reason.message : "回答の参照先を読み込めませんでした。"));
   }, [api, load, onError, token]);
 
   function edit(record: SurveyRecord) {
@@ -490,6 +521,7 @@ function AuditHistory({ api, token, onError, onNotice }: ChildProps) {
 
 function OperationsStatus({ api, token, onError, onNotice }: ChildProps) {
   const [jobs, setJobs] = useState<AnyRow[]>([]);
+  const [jobsNextCursor, setJobsNextCursor] = useState<string | null>(null);
   const [usage, setUsage] = useState<Record<string, unknown>>();
   const [sync, setSync] = useState<Record<string, unknown>>();
   const [health, setHealth] = useState<Record<string, unknown>>();
@@ -507,7 +539,10 @@ function OperationsStatus({ api, token, onError, onNotice }: ChildProps) {
       api.get<Page<AnyRow>>("/admin/data/usage?limit=100", { token }),
     ]);
     const [jobResult, usageResult, syncResult, healthResult, usageRowsResult] = entries;
-    if (jobResult.status === "fulfilled") setJobs(jobResult.value.items);
+    if (jobResult.status === "fulfilled") {
+      setJobs(jobResult.value.items);
+      setJobsNextCursor(jobResult.value.next_cursor);
+    }
     else onError(jobResult.reason instanceof Error ? jobResult.reason.message : "調査状況を読み込めませんでした。");
     if (usageResult.status === "fulfilled") {
       setUsage(usageResult.value);
@@ -519,6 +554,16 @@ function OperationsStatus({ api, token, onError, onNotice }: ChildProps) {
     setLoading(false);
   }, [api, onError, token]);
   useEffect(() => { void load(); }, [load]);
+
+  async function loadMoreJobs() {
+    if (!jobsNextCursor) return;
+    try {
+      const params = new URLSearchParams({ limit: "100", cursor: jobsNextCursor });
+      const data = await api.get<Page<AnyRow>>(`/admin/jobs?${params}`, { token });
+      setJobs((current) => [...current, ...data.items]);
+      setJobsNextCursor(data.next_cursor);
+    } catch (reason) { onError(reason instanceof Error ? reason.message : "調査ジョブの続きを読み込めませんでした。"); }
+  }
 
   async function saveUsage(event: FormEvent) {
     event.preventDefault();
@@ -551,6 +596,7 @@ function OperationsStatus({ api, token, onError, onNotice }: ChildProps) {
     </div>
     <div className="ops-card"><h3>調査ジョブ</h3>
       {jobs.length ? <div className="admin-row-list compact-list">{jobs.map((job) => <article className="admin-row" key={job.id}><div><strong>{String(job.query && typeof job.query === "object" ? (job.query as Record<string, unknown>).title ?? "曲情報" : "調査")}</strong><p>{String(job.status)} · 試行 {String(job.attempts ?? 0)} · {String(job.last_error ?? "エラーなし")}</p></div>{["failed", "needs_review"].includes(String(job.status)) && <button type="button" className="secondary-button" onClick={() => void retryJob(job)}>再試行</button>}</article>)}</div> : <p className="empty-state">待機中の調査はありません。</p>}
+      {jobsNextCursor && <button type="button" className="secondary-button" onClick={() => void loadMoreJobs()}>調査をもっと読み込む</button>}
     </div>
     <div className="ops-card"><h3>PCへの同期</h3>
       {sync ? <><p>変更番号上限: <strong>{String(sync.high_watermark ?? 0)}</strong></p>{Array.isArray(sync.items) && sync.items.length ? <ul className="sync-list">{(sync.items as Record<string, unknown>[]).map((item, index) => <li key={String(item.id ?? index)}>{String(item.collector_id)} · 番号 {String(item.cursor)} · schema {String(item.schema_version)}</li>)}</ul> : <p className="muted-note">収集確認はまだありません。</p>}</> : <p className="empty-state">同期状況を読み込んでいます。</p>}

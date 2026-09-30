@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { CatalogCandidate, Participant, RecordCreate } from "../shared/contracts";
 import { todayInJapan } from "./dates";
-import type { StoredCredential } from "./storage";
+import type { PendingRegistration, StoredCredential } from "./storage";
 import type { createApi } from "./api";
 
 type SurveyApi = ReturnType<typeof createApi>;
@@ -11,7 +11,9 @@ type Props = {
   credential?: StoredCredential;
   pendingCount: number;
   online: boolean;
+  pendingRegistration?: PendingRegistration;
   onCreateGuest: (name: string, deviceLabel: string) => Promise<void>;
+  onRetryRegistration: () => Promise<void>;
   onSubmit: (record: Omit<RecordCreate, "operation_id" | "participant_id">) => Promise<"cloud" | "queued">;
   onAddDevice: () => Promise<void>;
 };
@@ -20,7 +22,7 @@ function kindName(kind: string): string {
   return ({ original: "原曲", cover: "カバー", remix: "リミックス", other: "その他" } as Record<string, string>)[kind] ?? kind;
 }
 
-export function AnswerPanel({ api, selectedParticipant, credential, pendingCount, online, onCreateGuest, onSubmit, onAddDevice }: Props) {
+export function AnswerPanel({ api, selectedParticipant, credential, pendingCount, online, pendingRegistration, onCreateGuest, onRetryRegistration, onSubmit, onAddDevice }: Props) {
   const [name, setName] = useState("");
   const [deviceLabel, setDeviceLabel] = useState("この端末");
   const [showRegistration, setShowRegistration] = useState(false);
@@ -94,14 +96,24 @@ export function AnswerPanel({ api, selectedParticipant, credential, pendingCount
       </div>
 
       {!credential && <section className="identity-card">
-        {selectedParticipant ? <><h3>{selectedParticipant.name}さんの回答端末</h3><p>名前の切り替えだけでは編集権限は付きません。招待リンクで本人の端末を登録するか、新しい名前で参加できます。</p></>
-          : <><h3>はじめての回答</h3><p>参加者名と、この端末だけが使う本人確認情報を登録します。</p></>}
-        {!showRegistration ? <button className="secondary-button" type="button" onClick={() => setShowRegistration(true)}>新しく参加する</button>
-          : <form className="registration-form" onSubmit={(event) => { event.preventDefault(); setError(""); void onCreateGuest(name.trim(), deviceLabel.trim() || "この端末").catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "参加登録できませんでした。")); }}>
+        {pendingRegistration ? <>
+          <h3>端末登録の再試行</h3>
+          <p>サーバー応答が確認できていないため、保存した同じ登録要求を再送します。資格情報や操作IDは作り直しません。</p>
+          {pendingRegistration.kind === "create" ? <div className="registration-form">
+            <label>お名前<input value={pendingRegistration.request.name} disabled /></label>
+            <label>端末の呼び名<input value={pendingRegistration.request.device_label} disabled /></label>
+            <button className="primary-button" type="button" onClick={() => { setError(""); void onRetryRegistration().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "登録を再試行できませんでした。")); }}>登録を再試行</button>
+          </div> : <button className="primary-button" type="button" onClick={() => { setError(""); void onRetryRegistration().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "招待登録を再試行できませんでした。")); }}>招待登録を再試行</button>}
+        </> : <>
+          {selectedParticipant ? <><h3>{selectedParticipant.name}さんの回答端末</h3><p>名前の切り替えだけでは編集権限は付きません。招待リンクで本人の端末を登録するか、新しい名前で参加できます。</p></>
+            : <><h3>はじめての回答</h3><p>参加者名と、この端末だけが使う本人確認情報を登録します。</p></>}
+          {!showRegistration ? <button className="secondary-button" type="button" onClick={() => setShowRegistration(true)}>新しく参加する</button>
+            : <form className="registration-form" onSubmit={(event) => { event.preventDefault(); setError(""); void onCreateGuest(name.trim(), deviceLabel.trim() || "この端末").catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "参加登録できませんでした。")); }}>
             <label>お名前<input autoComplete="nickname" maxLength={80} required value={name} onChange={(event) => setName(event.target.value)} /></label>
             <label>端末の呼び名<input maxLength={80} value={deviceLabel} onChange={(event) => setDeviceLabel(event.target.value)} /></label>
             <div className="button-row"><button className="primary-button" type="submit">参加登録</button><button className="quiet-button" type="button" onClick={() => setShowRegistration(false)}>戻る</button></div>
           </form>}
+        </>}
       </section>}
 
       {credential && <div className="identity-banner"><span className="status-dot" />

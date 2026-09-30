@@ -46,6 +46,7 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
   const [peopleNextCursor, setPeopleNextCursor] = useState<string | null>(null);
   const [selectedParticipantId, setSelectedParticipantId] = useState("");
   const [credentials, setCredentials] = useState<StoredCredential[]>([]);
+  const [pendingRegistration, setPendingRegistration] = useState<PendingRegistration | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
   const [adminToken, setAdminToken] = useState<string | null>(null);
   const [adminPassword, setAdminPassword] = useState("");
@@ -84,6 +85,7 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
 
   const completeRegistration = useCallback(async (pending: PendingRegistration) => {
     if (registering.current || !navigator.onLine) return;
+    setPendingRegistration(pending);
     registering.current = true;
     setError("");
     try {
@@ -95,6 +97,7 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
       await saveCredential(apiBase, stored);
       await saveSelectedParticipant(apiBase, identity.participant.id);
       await clearPendingRegistration(apiBase);
+      setPendingRegistration(null);
       setCredentials((current) => [...current.filter((item) => item.participant_id !== stored.participant_id), stored]);
       setSelectedParticipantId(identity.participant.id);
       setParticipants((current) => current.some((item) => item.id === identity.participant.id) ? current.map((item) => item.id === identity.participant.id ? identity.participant : item) : [identity.participant, ...current]);
@@ -104,6 +107,7 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
     } catch (reason) {
       if (reason instanceof ApiError && reason.status >= 400 && reason.status < 500 && reason.status !== 429) {
         await clearPendingRegistration(apiBase);
+        setPendingRegistration(null);
       }
       const message = reason instanceof Error ? reason.message : "端末の登録を完了できませんでした。";
       setError(message);
@@ -158,6 +162,7 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
           await savePendingRegistration(apiBase, pending);
           clearInviteHash();
         }
+        setPendingRegistration(pending ?? null);
         if (pending && navigator.onLine) void completeRegistration(pending).catch(() => undefined);
       } catch (reason) {
         if (live) { setError(reason instanceof Error ? reason.message : "端末内の保存情報を読み込めませんでした。"); setBooted(true); }
@@ -196,7 +201,7 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
   }, [apiBase, completeRegistration, replayOutbox]);
 
   useEffect(() => {
-    if (!("serviceWorker" in navigator) || !globalThis.isSecureContext && location.hostname !== "127.0.0.1" && location.hostname !== "localhost") return;
+    if (env?.DEV || !("serviceWorker" in navigator) || !globalThis.isSecureContext && location.hostname !== "127.0.0.1" && location.hostname !== "localhost") return;
     const script = new URL(`${basePath}sw.js`, globalThis.location.href);
     const scope = new URL(basePath, globalThis.location.href).pathname;
     void navigator.serviceWorker.register(script, { scope }).then((registration) => {
@@ -211,18 +216,38 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
     const handleController = () => globalThis.location.reload();
     navigator.serviceWorker.addEventListener("controllerchange", handleController);
     return () => navigator.serviceWorker.removeEventListener("controllerchange", handleController);
-  }, [basePath]);
+  }, [basePath, env?.DEV]);
 
   async function createGuest(name: string, deviceLabel: string) {
+    const existing = await getPendingRegistration(apiBase);
+    if (existing) {
+      setPendingRegistration(existing);
+      if (existing.kind !== "create") throw new Error("受け取った招待の登録を先に完了してください。");
+      if (!navigator.onLine) {
+        setNotice("登録情報は端末内に残っています。接続後に同じ要求を再試行してください。");
+        return;
+      }
+      await completeRegistration(existing);
+      return;
+    }
     const pending: PendingRegistration = {
       kind: "create",
       request: { operation_id: newOperationId(), name, device_label: deviceLabel, device_secret: createSecret() } satisfies GuestCreate,
     };
     await savePendingRegistration(apiBase, pending);
+    setPendingRegistration(pending);
     if (!navigator.onLine) {
       setNotice("登録情報を端末内に保存しました。接続すると同じ登録内容を再送します。");
       return;
     }
+    await completeRegistration(pending);
+  }
+
+  async function retryRegistration() {
+    if (!navigator.onLine) throw new Error("登録を再試行するにはインターネット接続が必要です。");
+    const pending = await getPendingRegistration(apiBase);
+    if (!pending) throw new Error("再試行する登録はありません。新しく参加できます。");
+    setPendingRegistration(pending);
     await completeRegistration(pending);
   }
 
@@ -323,7 +348,7 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
     </div>}
     {updateWaiting && <div className="update-banner" role="status"><span>新しいアプリ版を利用できます。</span><button type="button" className="primary-button" onClick={() => updateWaiting.postMessage({ type: "SKIP_WAITING" })}>更新して再読み込み</button></div>}
 
-    {view === "answer" && <AnswerPanel api={api} selectedParticipant={currentParticipant} credential={credential} pendingCount={pendingCount} online={online} onCreateGuest={createGuest} onSubmit={submitRecord} onAddDevice={addDevice} />}
+    {view === "answer" && <AnswerPanel api={api} selectedParticipant={currentParticipant} credential={credential} pendingCount={pendingCount} online={online} pendingRegistration={pendingRegistration ?? undefined} onRetryRegistration={retryRegistration} onCreateGuest={createGuest} onSubmit={submitRecord} onAddDevice={addDevice} />}
     {view === "rankings" && <StatisticsPanel api={api} mode="rankings" />}
     {view === "history" && <HistoryPanel api={api} participant={currentParticipant} credential={credential} online={online} />}
     {view === "personal" && <StatisticsPanel api={api} mode="personal" participantId={selectedParticipantId || undefined} />}

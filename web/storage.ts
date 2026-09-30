@@ -6,10 +6,9 @@ export interface StoredCredential extends GuestIdentity {
   device_secret: string;
 }
 
-export interface PendingRegistration {
-  kind: "create" | "claim";
-  request: GuestCreate | GuestClaim;
-}
+export type PendingRegistration =
+  | { kind: "create"; request: GuestCreate }
+  | { kind: "claim"; request: GuestClaim };
 
 export interface PendingRecord {
   operation_id: string;

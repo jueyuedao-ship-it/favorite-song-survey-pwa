@@ -95,6 +95,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   activeFetch = undefined;
@@ -102,6 +103,8 @@ afterEach(() => {
 
 describe("回答と端末の本人情報", () => {
   it("初参加者が名前を作り、候補を選んで回答をクラウドへ送る", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T14:59:59.000Z"));
     let guestBody: Record<string, unknown> | undefined;
     let recordBody: Record<string, unknown> | undefined;
     let guestAuthorization = "";
@@ -220,6 +223,34 @@ describe("回答と端末の本人情報", () => {
     expect(bodies[0]?.operation_id).toMatch(/^[0-9a-f-]{36}$/i);
     await waitFor(async () => expect(await getPendingRegistration(API_BASE)).toBeUndefined());
     expect(await screen.findByText("澪さんの本人端末")).toBeInTheDocument();
+  });
+
+  it("登録ボタンをもう一度押しても失われた応答の同じ要求を再利用する", async () => {
+    let attempts = 0;
+    const bodies: Record<string, unknown>[] = [];
+    installApi((url, init) => {
+      if (url.pathname.endsWith("/participants")) return result({ items: [], next_cursor: null });
+      if (url.pathname.endsWith("/guest/create")) {
+        attempts++;
+        const body = JSON.parse(String(init.body));
+        bodies.push(body);
+        if (attempts === 1) throw new TypeError("response lost after server accepted registration");
+        if (JSON.stringify(body) !== JSON.stringify(bodies[0])) return failure("CONFLICT", "同じ名前です", 409);
+        return result({ participant: participant("p-click-retry", String(body.name)), device_id: "device-click-retry" }, 201);
+      }
+      return failure("NOT_FOUND", "見つかりません", 404);
+    });
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(await screen.findByRole("button", { name: "新しく参加する" }));
+    await user.type(screen.getByLabelText("お名前"), "澪");
+    await user.click(screen.getByRole("button", { name: "参加登録" }));
+    await user.click(await screen.findByRole("button", { name: "登録を再試行" }));
+    await screen.findByText("澪さんの本人端末");
+
+    expect(attempts).toBe(2);
+    expect(bodies[1]).toEqual(bodies[0]);
+    expect(await getPendingRegistration(API_BASE)).toBeUndefined();
   });
 
   it("オフライン回答を再起動後も元の端末権限と操作IDで再送する", async () => {
@@ -351,6 +382,170 @@ describe("管理と統計", () => {
     expect(calls.find(({ url }) => url.pathname.endsWith("/admin/login"))?.init.body).toBe('{"password":" raw admin password "}');
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it("カタログ編集フォームはテーブル切替直後に閉じて旧行を送信対象に残さない", async () => {
+    let resolveVersions!: (response: Response) => void;
+    const pendingVersions = new Promise<Response>((resolve) => { resolveVersions = resolve; });
+    installApi((url, init) => {
+      if (url.pathname.endsWith("/participants")) return result({ items: [], next_cursor: null });
+      if (url.pathname.endsWith("/admin/login")) return result({ session_token: "memory-admin-token", expires_at: "2026-09-30T08:00:00Z" });
+      if (url.pathname.endsWith("/admin/data/works") && init.method === "GET") return result({ items: [{ id: "work-1", revision: 2, title: "旧作品" }], next_cursor: null });
+      if (url.pathname.endsWith("/admin/data/versions") && init.method === "GET") return pendingVersions;
+      return failure("NOT_FOUND", "見つかりません", 404);
+    });
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(await screen.findByRole("button", { name: "管理者ログイン" }));
+    await user.type(screen.getByLabelText("管理者パスワード"), "secret");
+    await user.click(screen.getByRole("button", { name: "ログイン" }));
+    await user.click(await screen.findByRole("button", { name: "管理画面" }));
+    await user.click(await screen.findByRole("button", { name: "カタログ" }));
+    await screen.findByText("旧作品");
+    await user.click(await screen.findByRole("button", { name: "編集" }));
+    await screen.findByDisplayValue("旧作品");
+
+    await user.selectOptions(screen.getByLabelText("対象テーブル"), "versions");
+    try {
+      expect(screen.queryByRole("button", { name: "変更を保存" })).not.toBeInTheDocument();
+    } finally {
+      resolveVersions(result({ items: [], next_cursor: null }));
+    }
+  });
+
+  it("DBフォームで編集対象のテーブルを切り替えると、そのテーブルへ保存する", async () => {
+    const calls = installApi((url, init) => {
+      if (url.pathname.endsWith("/participants")) return result({ items: [], next_cursor: null });
+      if (url.pathname.endsWith("/admin/login")) return result({ session_token: "memory-admin-token", expires_at: "2026-09-30T08:00:00Z" });
+      if (url.pathname.endsWith("/admin/data/participants") && init.method === "GET") return result({ items: [{ id: "p-1", revision: 1, name: "参加者" }], next_cursor: null });
+      if (url.pathname.endsWith("/admin/data/works") && init.method === "GET") return result({ items: [{ id: "work-1", revision: 2, title: "以前の作品" }], next_cursor: null });
+      if (url.pathname.endsWith("/admin/data/works/work-1") && init.method === "PATCH") return result({ id: "work-1", revision: 3, title: "更新作品" });
+      return failure("NOT_FOUND", "見つかりません", 404);
+    });
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(await screen.findByRole("button", { name: "管理者ログイン" }));
+    await user.type(screen.getByLabelText("管理者パスワード"), "secret");
+    await user.click(screen.getByRole("button", { name: "ログイン" }));
+    await user.click(await screen.findByRole("button", { name: "管理画面" }));
+    await user.click(await screen.findByRole("button", { name: "DBフォーム" }));
+    await user.selectOptions(screen.getByLabelText("データ表"), "works");
+    await screen.findByText("以前の作品");
+    await user.click(await screen.findByRole("button", { name: "編集" }));
+    await user.clear(screen.getByLabelText("作品名"));
+    await user.type(screen.getByLabelText("作品名"), "更新作品");
+    await user.click(screen.getByRole("button", { name: "変更を保存" }));
+    await waitFor(() => expect(calls.some(({ url, init }) => url.pathname.endsWith("/admin/data/works/work-1") && init.method === "PATCH")).toBe(true));
+    const patch = calls.find(({ url, init }) => url.pathname.endsWith("/admin/data/works/work-1") && init.method === "PATCH");
+    expect(JSON.parse(String(patch?.init.body))).toMatchObject({ expected_revision: 2, values: { title: "更新作品" } });
+  });
+
+  it("参照URLを空にして保存すると、既存値をnullへ更新する", async () => {
+    const work = { id: "work-1", revision: 1, title: "原曲" };
+    const entity = { id: "entity-1", revision: 1, name: "歌い手" };
+    const existing = { id: "version-1", revision: 4, work_id: work.id, title: "カバー", kind: "cover", reference_url: "https://example.test/song", uploader_entity_id: entity.id, research_status: "complete", manual_lock: false };
+    const calls = installApi((url, init) => {
+      if (url.pathname.endsWith("/participants")) return result({ items: [], next_cursor: null });
+      if (url.pathname.endsWith("/admin/login")) return result({ session_token: "memory-admin-token", expires_at: "2026-09-30T08:00:00Z" });
+      if (url.pathname.endsWith("/admin/data/versions") && init.method === "GET") return result({ items: [existing], next_cursor: null });
+      if (url.pathname.endsWith("/admin/data/works") && init.method === "GET") return result({ items: [work], next_cursor: null });
+      if (url.pathname.endsWith("/admin/data/entities") && init.method === "GET") return result({ items: [entity], next_cursor: null });
+      if (url.pathname.endsWith("/admin/data/versions/version-1") && init.method === "PATCH") return result({ ...existing, revision: 5, reference_url: null });
+      return result({ items: [], next_cursor: null });
+    });
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(await screen.findByRole("button", { name: "管理者ログイン" }));
+    await user.type(screen.getByLabelText("管理者パスワード"), "secret");
+    await user.click(screen.getByRole("button", { name: "ログイン" }));
+    await user.click(await screen.findByRole("button", { name: "管理画面" }));
+    await user.click(await screen.findByRole("button", { name: "カタログ" }));
+    await user.selectOptions(screen.getByLabelText("対象テーブル"), "versions");
+    await screen.findByRole("heading", { name: "カバー" });
+    await user.click(await screen.findByRole("button", { name: "編集" }));
+    await user.clear(screen.getByLabelText("参照URL"));
+    await user.click(screen.getByRole("button", { name: "変更を保存" }));
+    await waitFor(() => expect(calls.some(({ url, init }) => url.pathname.endsWith("/admin/data/versions/version-1") && init.method === "PATCH")).toBe(true));
+    const patch = calls.find(({ url, init }) => url.pathname.endsWith("/admin/data/versions/version-1") && init.method === "PATCH");
+    expect(JSON.parse(String(patch?.init.body)).values.reference_url).toBeNull();
+  });
+
+  it("招待・端末・調査ジョブ一覧の続きを読み込める", async () => {
+    const alice = participant("p-alice", "葵");
+    const calls = installApi((url, init) => {
+      if (url.pathname.endsWith("/participants")) return result({ items: [alice], next_cursor: null });
+      if (url.pathname.endsWith("/admin/login")) return result({ session_token: "memory-admin-token", expires_at: "2026-09-30T08:00:00Z" });
+      if (url.pathname.endsWith("/admin/participants")) return result({ items: [alice], next_cursor: null });
+      if (url.pathname.endsWith("/admin/invites")) {
+        return url.searchParams.has("cursor")
+          ? result({ items: [{ id: "invite-2", participant_id: "p-later", expires_at: "2026-10-02T00:00:00Z", claimed_at: null }], next_cursor: null })
+          : result({ items: [{ id: "invite-1", participant_id: alice.id, expires_at: "2026-10-01T00:00:00Z", claimed_at: null }], next_cursor: "invite-1" });
+      }
+      if (url.pathname.endsWith("/admin/devices")) {
+        return url.searchParams.has("cursor")
+          ? result({ items: [{ id: "device-2", revision: 1, participant_id: alice.id, label: "二台目", revoked_at: null }], next_cursor: null })
+          : result({ items: [{ id: "device-1", revision: 1, participant_id: alice.id, label: "一台目", revoked_at: null }], next_cursor: "device-1" });
+      }
+      if (url.pathname.endsWith("/admin/jobs")) {
+        return url.searchParams.has("cursor")
+          ? result({ items: [{ id: "job-2", revision: 1, query: { title: "後半の調査" }, status: "failed", attempts: 1 }], next_cursor: null })
+          : result({ items: [{ id: "job-1", revision: 1, query: { title: "前半の調査" }, status: "failed", attempts: 1 }], next_cursor: "job-1" });
+      }
+      if (url.pathname.endsWith("/admin/usage")) return result({ month: "2026-09", tavily_credits: 0, tavily_credit_cap: 800, groq_requests: 0, configured: {} });
+      if (url.pathname.endsWith("/admin/sync-status")) return result({ items: [], high_watermark: 0 });
+      if (url.pathname.endsWith("/health")) return result({ configured: { admin: true, sync: false, groq: false, tavily: false, research_runner: false } });
+      if (url.pathname.endsWith("/admin/data/usage")) return result({ items: [], next_cursor: null });
+      return result({ items: [], next_cursor: null });
+    });
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(await screen.findByRole("button", { name: "管理者ログイン" }));
+    await user.type(screen.getByLabelText("管理者パスワード"), "secret");
+    await user.click(screen.getByRole("button", { name: "ログイン" }));
+    await user.click(await screen.findByRole("button", { name: "管理画面" }));
+    await screen.findByRole("heading", { name: "葵" });
+    await user.click(await screen.findByRole("button", { name: "招待をもっと読み込む" }));
+    await waitFor(() => expect(calls.some(({ url }) => url.pathname.endsWith("/admin/invites") && url.searchParams.get("cursor") === "invite-1")).toBe(true));
+
+    await user.click(screen.getByRole("button", { name: "端末を見る" }));
+    await screen.findByText("一台目");
+    await user.click(await screen.findByRole("button", { name: "端末をもっと読み込む" }));
+    await screen.findByText("二台目");
+    expect(calls.some(({ url }) => url.pathname.endsWith("/admin/devices") && url.searchParams.get("cursor") === "device-1")).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "運用状況" }));
+    await screen.findByText("前半の調査");
+    await user.click(await screen.findByRole("button", { name: "調査をもっと読み込む" }));
+    await screen.findByText("後半の調査");
+    expect(calls.some(({ url }) => url.pathname.endsWith("/admin/jobs") && url.searchParams.get("cursor") === "job-1")).toBe(true);
+  });
+
+  it("カタログの関連名セレクターは後続ページの作品も選べる", async () => {
+    const calls = installApi((url, init) => {
+      if (url.pathname.endsWith("/participants")) return result({ items: [], next_cursor: null });
+      if (url.pathname.endsWith("/admin/login")) return result({ session_token: "memory-admin-token", expires_at: "2026-09-30T08:00:00Z" });
+      if (url.pathname.endsWith("/admin/data/works")) {
+        return url.searchParams.has("cursor")
+          ? result({ items: [{ id: "work-late", revision: 1, title: "後半作品" }], next_cursor: null })
+          : result({ items: [{ id: "work-first", revision: 1, title: "前半作品" }], next_cursor: "work-first" });
+      }
+      if (url.pathname.endsWith("/admin/data/entities")) return result({ items: [], next_cursor: null });
+      if (url.pathname.endsWith("/admin/data/versions")) return result({ items: [], next_cursor: null });
+      return result({ items: [], next_cursor: null });
+    });
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(await screen.findByRole("button", { name: "管理者ログイン" }));
+    await user.type(screen.getByLabelText("管理者パスワード"), "secret");
+    await user.click(screen.getByRole("button", { name: "ログイン" }));
+    await user.click(await screen.findByRole("button", { name: "管理画面" }));
+    await user.click(await screen.findByRole("button", { name: "カタログ" }));
+    await user.selectOptions(screen.getByLabelText("対象テーブル"), "versions");
+    await user.click(await screen.findByRole("button", { name: "新規登録" }));
+    const workOptions = Array.from(screen.getByLabelText("作品").querySelectorAll("option")).map((option) => option.textContent);
+    expect(workOptions).toContain("前半作品");
+    expect(workOptions).toContain("後半作品");
+    expect(calls.some(({ url }) => url.pathname.endsWith("/admin/data/works") && url.searchParams.get("cursor") === "work-first")).toBe(true);
   });
 
   it("人気順位は回答件数と支援人数を分け、タグ推移は件数・割合・未解析数を示す", async () => {

@@ -888,3 +888,165 @@ it("recognizes explicit featured vocalist attribution in official recording titl
     ),
   ).not.toThrow();
 });
+it.each([
+  { role: "composer", name: "Alice", quote: "Vocal: Alice. Music: Bob" },
+  { role: "vocalist", name: "Alice", quote: "Vocal: Malice" },
+])(
+  "rejects role/name cross-clause or substring attribution $quote",
+  async (c) => {
+    await answer();
+    model.recordings[0].credits = [
+      { ...c, kind: "person", source_id: "s0", aliases: [] },
+    ];
+    model.recordings[0].tags = [];
+    const f = (async (i: any, b: any) =>
+      String(i).endsWith("/extract")
+        ? json({
+            results: [{ url, raw_content: "Blue Song official. " + c.quote }],
+          })
+        : provider(i, b)) as typeof fetch;
+    for (let i = 0; i < 25; i++) await run(env(), undefined, f);
+    expect(await allRows(db, "credits")).toHaveLength(0);
+    expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+  },
+);
+it.each([
+  { role: "composer", name: "Bob", quote: "Vocal: Alice. Music: Bob" },
+  { role: "composer", name: "DECO*27", quote: "Lyrics & Music: DECO*27" },
+  { role: "vocalist", name: "初音ミク", quote: "歌唱：初音ミク" },
+  { role: "vocalist", name: "Alice", quote: "Blue Song feat. Alice" },
+  { role: "vocalist", name: "Alice", quote: "featuring Alice" },
+])("preserves explicit supported multilingual attribution $quote", (c) => {
+  expect(() =>
+    validateAnalysis(
+      JSON.stringify({
+        recordings: [
+          {
+            title: "Blue Song",
+            reference_url: url,
+            kind: "original",
+            source_id: "s0",
+            quote: "Blue Song official",
+            credits: [{ ...c, kind: "person", source_id: "s0", aliases: [] }],
+            tags: [],
+          },
+        ],
+      }),
+      [
+        {
+          id: "s0",
+          url,
+          title: "Blue Song",
+          content: "Blue Song official. " + c.quote,
+        },
+      ],
+      { title: "Blue Song", reference_url: null },
+      [],
+    ),
+  ).not.toThrow();
+});
+it("fits three allowed Japanese sources with all 50 tags before inference transport", async () => {
+  await answer();
+  const vurls = [
+    url,
+    "https://www.youtube.com/watch?v=zyxwvutsrqp",
+    "https://www.youtube.com/watch?v=123456789ab",
+  ];
+  const contents = vurls.map(() =>
+    (
+      "Blue Song official. Vocal: Alice. " +
+      "これは公式の日本語の曲紹介です。".repeat(80)
+    ).slice(0, 600),
+  );
+  model.recordings[0].credits = [
+    {
+      name: "Alice",
+      kind: "person",
+      role: "vocalist",
+      source_id: "s0",
+      quote: "Vocal: Alice",
+      aliases: [],
+    },
+  ];
+  model.recordings[0].tags = [];
+  let sent = 0;
+  const f = (async (i: any, b: any) => {
+    if (String(i).endsWith("/search"))
+      return json({
+        results: vurls.map((u, k) => ({
+          url: u,
+          title: "日本語".repeat(80),
+          content: contents[k],
+        })),
+      });
+    if (String(i).endsWith("/extract"))
+      return json({
+        results: vurls.map((u, k) => ({ url: u, raw_content: contents[k] })),
+      });
+    if (String(i).endsWith("/completions")) {
+      sent++;
+      const request = JSON.parse(b.body);
+      const input = JSON.parse(request.messages[1].content);
+      expect(input.tags).toHaveLength(50);
+      const estimate =
+        256 +
+        Array.from(b.body as string).reduce(
+          (n, c) => n + (c.charCodeAt(0) > 127 ? 2 : 1 / 3),
+          0,
+        ) +
+        request.max_completion_tokens;
+      expect(estimate).toBeLessThanOrEqual(7600);
+      for (const e of input.sources)
+        expect(contents[Number(e.id.slice(1))].startsWith(e.content)).toBe(
+          true,
+        );
+    }
+    return provider(i, b);
+  }) as typeof fetch;
+  await drain(0);
+  for (let i = 0; i < 25; i++) await run(env(), undefined, f);
+  expect(sent).toBe(1);
+  expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
+  const snapshots = await allRows(db, "sources");
+  expect(snapshots[0].excerpt).toContain("Vocal: Alice");
+});
+it.each([
+  { name: "", quote: "Vocal: " },
+  { name: "Alice", quote: "Vocal: Alice.com" },
+])("rejects incomplete credited identity $quote", (c) => {
+  expect(() =>
+    validateAnalysis(
+      JSON.stringify({
+        recordings: [
+          {
+            title: "Blue Song",
+            reference_url: url,
+            kind: "original",
+            source_id: "s0",
+            quote: "Blue Song official",
+            credits: [
+              {
+                ...c,
+                role: "vocalist",
+                kind: "person",
+                source_id: "s0",
+                aliases: [],
+              },
+            ],
+            tags: [],
+          },
+        ],
+      }),
+      [
+        {
+          id: "s0",
+          url,
+          title: "Blue Song",
+          content: "Blue Song official. " + c.quote,
+        },
+      ],
+      { title: "Blue Song", reference_url: null },
+      [],
+    ),
+  ).toThrow();
+});

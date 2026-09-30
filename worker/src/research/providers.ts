@@ -48,6 +48,93 @@ export class ResearchError extends Error {
 }
 export const norm = (s: string) =>
   s.normalize("NFKC").toLocaleLowerCase("ja").replace(/\s+/g, " ").trim();
+/** Only a complete name directly attributed by the matching role clause is accepted. */
+export function explicitCredit(quote: string, name: string, role: CreditRole) {
+  if (!norm(name)) return false;
+  const groups: { role: CreditRole; pattern: string }[] = [
+    {
+      role: "composer",
+      pattern:
+        "lyrics\\s*(?:&|and)\\s*music|music\\s*(?:&|and)\\s*lyrics|composed\\s+by|composer|composition|music|作詞[&/・と]作曲|作曲(?:者)?",
+    },
+    {
+      role: "vocalist",
+      pattern: "featuring|feat|vocalist|vocals?|歌唱|ボーカル|歌手|歌声|歌",
+    },
+    {
+      role: "release_name",
+      pattern:
+        "produced\\s+by|release\\s+artist|artist|発表名義|名義|アーティスト",
+    },
+    {
+      role: "uploader",
+      pattern: "uploaded\\s+by|uploader|channel|投稿(?:者)?|チャンネル",
+    },
+  ];
+  const input = quote.normalize("NFKC").toLocaleLowerCase("ja");
+  const markers = [
+    ...input.matchAll(
+      new RegExp(
+        "(?<![\\p{L}\\p{N}_])(" +
+          groups.map((g) => g.pattern).join("|") +
+          ")(?:\\s*[:.\\-–—]\\s*|\\s+)",
+        "gu",
+      ),
+    ),
+  ];
+  const escaped = norm(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const complete = new RegExp(
+    "(?:^|[,/&・(「【])\\s*" +
+      escaped +
+      "(?=$|\\s*[,/&・)」】!?。]|\\.(?=\\s|$))",
+    "u",
+  );
+  return markers.some((m, i) => {
+    const matched = groups.find((g) =>
+      new RegExp("^(?:" + g.pattern + ")$", "u").test(m[1]),
+    );
+    if (matched?.role !== role) return false;
+    const value = input
+      .slice(m.index! + m[0].length, markers[i + 1]?.index ?? input.length)
+      .split(/[;；\n。]/)[0]
+      .trim();
+    return complete.test(value);
+  });
+}
+export function requestTokenEstimate(body: unknown) {
+  let estimate = 256;
+  for (const ch of JSON.stringify(body))
+    estimate += ch.charCodeAt(0) > 127 ? 2 : 1 / 3;
+  return estimate + Number((body as any).max_completion_tokens ?? 0);
+}
+/** Fit the complete schema/dictionary/output budget, preserving exact content prefixes. */
+export function fitInferenceRequest(body: any, evidence: Evidence[]) {
+  const sources = evidence.map((e) => ({ ...e }));
+  const input = JSON.parse(body.messages[1].content);
+  const update = () => {
+    input.sources = sources;
+    body.messages[1].content = JSON.stringify(input);
+  };
+  update();
+  while (requestTokenEstimate(body) > 7600) {
+    const longest = sources.reduce((a, b) =>
+      a.content.length >= b.content.length ? a : b,
+    );
+    if (longest.content.length > 128)
+      longest.content = longest.content.slice(
+        0,
+        Math.max(128, longest.content.length - 64),
+      );
+    else {
+      const title = sources.find((e) => e.title.length > 80);
+      if (title) title.title = title.title.slice(0, 80);
+      else if (sources.length > 1) sources.pop();
+      else throw new ResearchError("GROQ_REQUEST_TOO_LARGE");
+    }
+    update();
+  }
+  return { body, evidence: sources };
+}
 const str = { type: "string" };
 const obj = (properties: Record<string, unknown>) => ({
   type: "object",
@@ -189,17 +276,7 @@ export function validateAnalysis(
       )
         fail();
       quote(c.source_id, c.quote, url!);
-      const roles: Record<string, RegExp> = {
-        vocalist: /vocal|feat[.．]?|featuring|歌唱|歌声|歌手|歌:/i,
-        composer: /music|compos|作曲/i,
-        release_name: /produced by|名義|artist|アーティスト/i,
-        uploader: /upload|channel|投稿|チャンネル/i,
-      };
-      if (
-        !roles[c.role]?.test(c.quote) ||
-        !norm(c.quote).includes(norm(c.name))
-      )
-        fail();
+      if (!explicitCredit(c.quote, c.name, c.role)) fail();
       for (const a of c.aliases) {
         if (
           typeof a.name !== "string" ||
@@ -250,11 +327,9 @@ export async function providerJson(
 ): Promise<any> {
   const serialized = body ? JSON.stringify(body) : undefined;
   if (url.startsWith("https://api.groq.com/") && serialized) {
-    // Conservative character estimate plus reserved output; the cron spacing is 5 minutes.
-    let estimate = 256;
-    for (const ch of serialized) estimate += ch.charCodeAt(0) > 127 ? 2 : 1 / 3;
-    estimate += Number((body as any).max_completion_tokens ?? 0);
-    if (estimate > 7600) throw new ResearchError("GROQ_REQUEST_TOO_LARGE");
+    // Include the schema, dictionary and output allowance in the same transport guard.
+    if (requestTokenEstimate(body) > 7600)
+      throw new ResearchError("GROQ_REQUEST_TOO_LARGE");
   }
   let response: Response;
   try {

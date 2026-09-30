@@ -8,6 +8,7 @@ import {
   analysisSchema,
   ResearchError,
   norm,
+  fitInferenceRequest,
   type Evidence,
 } from "./providers";
 import {
@@ -147,10 +148,7 @@ export async function runResearchQueue(
             },
           ],
         }));
-      const p = await providerJson(
-        fetcher,
-        "https://api.groq.com/openai/v1/chat/completions",
-        env.GROQ_API_KEY,
+      const fitted = fitInferenceRequest(
         {
           model: env.GROQ_MODEL ?? "qwen/qwen3.8-27b",
           reasoning_effort: "none",
@@ -186,7 +184,29 @@ export async function runResearchQueue(
             },
           ],
         },
+        j.evidence!,
       );
+      if (JSON.stringify(fitted.evidence) !== JSON.stringify(j.evidence)) {
+        const fittedJob = updated(j, { evidence: fitted.evidence });
+        await mutate(
+          env,
+          actor,
+          "research:inference-budget",
+          operation(),
+          async () => ({
+            data: null,
+            changes: [{ table: "research_jobs", before: j, after: fittedJob }],
+          }),
+        );
+        Object.assign(j, fittedJob);
+      }
+      const p = await providerJson(
+        fetcher,
+        "https://api.groq.com/openai/v1/chat/completions",
+        env.GROQ_API_KEY,
+        fitted.body,
+      );
+
       const a = validateAnalysis(
         p.choices?.[0]?.message?.content,
         j.evidence!,

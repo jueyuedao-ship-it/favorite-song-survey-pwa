@@ -167,8 +167,17 @@ export async function mutate<T>(
   };
   const saved = await replay();
   if (saved) return saved;
-  const plan = await build(),
-    status = plan.status ?? 200;
+  let plan: Plan<T>;
+  try {
+    plan = await build();
+  } catch (error) {
+    // An identical request may commit after our first replay read, before the
+    // builder reads the newly changed/deleted row or consumed invitation.
+    const repeated = await replay();
+    if (repeated) return repeated;
+    throw error;
+  }
+  const status = plan.status ?? 200;
   const statements: D1PreparedStatement[] = [
     stmt(
       env.DB,

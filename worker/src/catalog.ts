@@ -271,7 +271,21 @@ export function referenceGuards(
         row.version_id,
       ),
     );
-  if (table === "sources") add("version_id", "versions");
+  if (table === "sources") {
+    add("version_id", "versions");
+    // Forward provenance checks on credit/tag writes are insufficient: moving
+    // their source must recheck every active reverse reference in this batch.
+    for (const dependent of ["credits", "tag_assignments"] as const) {
+      guards.push(
+        check(
+          db,
+          `NOT EXISTS(SELECT 1 FROM ${dependent} WHERE json_extract(data,'$.source_id')=? AND json_extract(data,'$.version_id')<>? AND json_extract(data,'$.deleted_at') IS NULL)`,
+          row.id,
+          row.version_id,
+        ),
+      );
+    }
+  }
   if (table === "responses") {
     add("participant_id", "participants");
     add("version_id", "versions");

@@ -3,6 +3,8 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { build } from "esbuild";
 import { readFile, readdir } from "node:fs/promises";
 import { pbkdf2Sync, createHash } from "node:crypto";
+import worker from "../src/index";
+import type { WorkerEnv } from "../../shared/contracts";
 
 let mf: Miniflare;
 let db: D1Database;
@@ -14,6 +16,104 @@ const SYNC = "test-only-collector-secret";
 let serial = 0;
 function op() {
   return `test-operation-${++serial}`;
+}
+/** A scheduling gate over real D1 reads, never a fabricated database result. */
+function pauseFirstReplayRead(real: D1Database) {
+  let entered!: () => void, release!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const resume = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let paused = false;
+  function wrap(statement: D1PreparedStatement): D1PreparedStatement {
+    return new Proxy(statement, {
+      get(target, key) {
+        if (key === "bind")
+          return (...args: unknown[]) => wrap(target.bind(...args));
+        if (key === "first")
+          return async (column?: string) => {
+            const value =
+              column === undefined
+                ? await target.first()
+                : await target.first(column);
+            if (!paused) {
+              paused = true;
+              entered();
+              await resume;
+            }
+            return value;
+          };
+        const value = Reflect.get(target, key);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }
+  const gated = new Proxy(real, {
+    get(target, key) {
+      if (key === "prepare")
+        return (sql: string) => {
+          const statement = target.prepare(sql);
+          return !paused &&
+            sql.startsWith("SELECT fingerprint,response,status FROM operations")
+            ? wrap(statement)
+            : statement;
+        };
+      const value = Reflect.get(target, key);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { db: gated, reached, release };
+}
+/** Pause before the actual write transaction; every statement still runs in real D1. */
+function pauseFirstBatch(real: D1Database) {
+  let entered!: () => void, release!: () => void;
+  const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    }),
+    resume = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+  let paused = false;
+  const gated = new Proxy(real, {
+    get(target, key) {
+      if (key === "batch")
+        return async (statements: D1PreparedStatement[]) => {
+          if (!paused) {
+            paused = true;
+            entered();
+            await resume;
+          }
+          return target.batch(statements);
+        };
+      const value = Reflect.get(target, key);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { db: gated, reached, release };
+}
+async function directRetry(
+  path: string,
+  method: string,
+  body: unknown,
+  token: string | undefined,
+  gate: ReturnType<typeof pauseFirstReplayRead>,
+) {
+  const bindings = (await mf.getBindings()) as unknown as WorkerEnv;
+  const result = await worker.fetch(
+    new Request(`http://localhost/api/v1${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    }),
+    { ...bindings, DB: gate.db },
+    {} as ExecutionContext,
+  );
+  return { status: result.status, ...((await result.json()) as any) };
 }
 async function api(
   path: string,
@@ -153,6 +253,225 @@ afterAll(async () => {
 });
 
 describe("D1 HTTP capability and mutation integrity", () => {
+  it.each(["PATCH", "DELETE"] as const)(
+    "replays identical %s after its winner commits between initial replay read and guarded build",
+    async (method) => {
+      await register("A", A);
+      const song = await version(),
+        rec = await record(A, song.id, "2026-09-28");
+      const path = `/records/${rec.data.id}`,
+        body = {
+          operation_id: op(),
+          expected_revision: 1,
+          ...(method === "PATCH" ? { record_date: "2026-09-29" } : {}),
+        };
+      const gate = pauseFirstReplayRead(db),
+        retry = directRetry(path, method, body, A, gate);
+      await gate.reached;
+      const winner = await api(path, method, body, A);
+      expect(winner.status).toBe(200);
+      const afterWinner = (await api("/admin/export", "GET", undefined, admin))
+        .data;
+      gate.release();
+      const replayed = await retry;
+      expect(replayed.status).toBe(200);
+      expect(replayed.data).toEqual(winner.data);
+      const afterReplay = (await api("/admin/export", "GET", undefined, admin))
+        .data;
+      expect(afterReplay.high_watermark).toBe(afterWinner.high_watermark);
+      expect(afterReplay.tables.responses).toEqual(
+        afterWinner.tables.responses,
+      );
+      expect(afterReplay.tables.audit).toEqual(afterWinner.tables.audit);
+      const differentOperation = await api(
+        path,
+        method,
+        { ...body, operation_id: op() },
+        A,
+      );
+      expect(differentOperation.status).toBe(method === "PATCH" ? 409 : 404);
+    },
+  );
+  it("replays identical invite claim after its winner consumes the invite between replay read and build", async () => {
+    const person = await row("participants", { name: "Invited replay" });
+    expect(
+      (
+        await api(
+          "/admin/invites",
+          "POST",
+          {
+            operation_id: op(),
+            participant_id: person.id,
+            invite_secret: INVITE,
+          },
+          admin,
+        )
+      ).status,
+    ).toBe(201);
+    const body = {
+        operation_id: op(),
+        invite_secret: INVITE,
+        device_secret: A,
+        device_label: "Phone",
+      },
+      gate = pauseFirstReplayRead(db);
+    const retry = directRetry("/guest/claim", "POST", body, undefined, gate);
+    await gate.reached;
+    const winner = await api("/guest/claim", "POST", body);
+    expect(winner.status).toBe(201);
+    const afterWinner = (await api("/admin/export", "GET", undefined, admin))
+      .data;
+    gate.release();
+    const replayed = await retry;
+    expect(replayed.status).toBe(201);
+    expect(replayed.data).toEqual(winner.data);
+    const afterReplay = (await api("/admin/export", "GET", undefined, admin))
+      .data;
+    expect(afterReplay.high_watermark).toBe(afterWinner.high_watermark);
+    expect(afterReplay.tables.devices).toEqual(afterWinner.tables.devices);
+    expect(afterReplay.tables.audit).toEqual(afterWinner.tables.audit);
+    expect(
+      (await api("/guest/claim", "POST", { ...body, operation_id: op() }))
+        .status,
+    ).toBe(409);
+  });
+  it.each(["credits", "tag_assignments"] as const)(
+    "rejects moving a source already referenced by active %s while allowing same-version and unused edits",
+    async (table) => {
+      const first = await version("First"),
+        second = await version("Second");
+      const source = await row("sources", {
+        version_id: first.id,
+        url: "https://example.org/first",
+        title: "First evidence",
+        excerpt: "Explicit evidence",
+        origin: "admin",
+      });
+      const values =
+        table === "credits"
+          ? {
+              entity_id: (
+                await row("entities", { name: "Singer", kind: "person" })
+              ).id,
+              role: "vocalist",
+            }
+          : {
+              tag_id: "tag-01",
+              evidence: "Explicit tag evidence",
+              origin: "admin",
+            };
+      await row(table, {
+        ...values,
+        version_id: first.id,
+        source_id: source.id,
+        confirmed: true,
+      });
+      const before = (await api("/admin/export", "GET", undefined, admin)).data;
+      const rejected = await api(
+        `/admin/data/sources/${source.id}`,
+        "PATCH",
+        {
+          operation_id: op(),
+          expected_revision: 1,
+          values: { version_id: second.id },
+        },
+        admin,
+      );
+      expect(rejected.status).toBe(409);
+      const after = (await api("/admin/export", "GET", undefined, admin)).data;
+      expect(after.high_watermark).toBe(before.high_watermark);
+      expect(after.tables.sources).toEqual(before.tables.sources);
+      expect(after.tables.audit).toEqual(before.tables.audit);
+      const same = await api(
+        `/admin/data/sources/${source.id}`,
+        "PATCH",
+        {
+          operation_id: op(),
+          expected_revision: 1,
+          values: { version_id: first.id, excerpt: "Corrected evidence" },
+        },
+        admin,
+      );
+      expect(same.status).toBe(200);
+      const unused = await row("sources", {
+        version_id: first.id,
+        url: "https://example.org/unused",
+        title: "Unreferenced evidence",
+        excerpt: "Evidence",
+        origin: "admin",
+      });
+      expect(
+        (
+          await api(
+            `/admin/data/sources/${unused.id}`,
+            "PATCH",
+            {
+              operation_id: op(),
+              expected_revision: 1,
+              values: { version_id: second.id },
+            },
+            admin,
+          )
+        ).status,
+      ).toBe(200);
+    },
+  );
+  it.each(["credits", "tag_assignments"] as const)(
+    "checks reverse %s references inside the source write transaction after a concurrent insertion",
+    async (table) => {
+      const first = await version("Concurrent first"),
+        second = await version("Concurrent second");
+      const source = await row("sources", {
+        version_id: first.id,
+        url: "https://example.org/concurrent",
+        title: "Evidence",
+        excerpt: "Explicit evidence",
+        origin: "admin",
+      });
+      const values =
+        table === "credits"
+          ? {
+              entity_id: (
+                await row("entities", { name: "Singer", kind: "person" })
+              ).id,
+              role: "vocalist",
+            }
+          : {
+              tag_id: "tag-01",
+              evidence: "Explicit tag evidence",
+              origin: "admin",
+            };
+      const gate = pauseFirstBatch(db),
+        move = directRetry(
+          `/admin/data/sources/${source.id}`,
+          "PATCH",
+          {
+            operation_id: op(),
+            expected_revision: 1,
+            values: { version_id: second.id },
+          },
+          admin,
+          gate,
+        );
+      await gate.reached;
+      await row(table, {
+        ...values,
+        version_id: first.id,
+        source_id: source.id,
+        confirmed: true,
+      });
+      const afterInsert = (await api("/admin/export", "GET", undefined, admin))
+        .data;
+      gate.release();
+      expect((await move).status).toBe(409);
+      const afterMove = (await api("/admin/export", "GET", undefined, admin))
+        .data;
+      expect(afterMove.high_watermark).toBe(afterInsert.high_watermark);
+      expect(afterMove.tables.sources).toEqual(afterInsert.tables.sources);
+      expect(afterMove.tables[table]).toEqual(afterInsert.tables[table]);
+      expect(afterMove.tables.audit).toEqual(afterInsert.tables.audit);
+    },
+  );
   it("queues unknown title-only responses durably and preserves them without a research runner", async () => {
     await register("A", A);
     const response = await record(A, null, "2026-09-30");

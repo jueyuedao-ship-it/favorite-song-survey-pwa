@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>好きな曲アンケートPWA 計画書</title>
+<style>
+:root{color-scheme:light;font-family:system-ui,"Yu Gothic",sans-serif;color:#223248;background:#eef4f8}
+body{margin:0;line-height:1.9}main{max-width:1000px;margin:32px auto;padding:36px 48px;background:white;border-radius:20px;box-shadow:0 8px 36px #1939580a}
+h1{font-size:2rem;line-height:1.5;color:#153d60}h2{margin-top:3rem;border-bottom:2px solid #dfeaf3;padding-bottom:.5rem}h3{margin-top:2rem}a{color:#1b6095}nav{background:#edf5fb;padding:20px;border-radius:12px}nav ul{margin:0}.table-scroll{overflow:auto}table{width:100%;border-collapse:collapse;margin:20px 0;font-size:.94rem}th,td{padding:12px 16px;text-align:left;border:1px solid #dfe7ed;vertical-align:top}th{background:#edf5fb}code{background:#f0f4f7;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}li{margin:8px 0}footer{margin-top:3rem;color:#627388;font-size:.88rem}
+@media(max-width:700px){main{margin:0;padding:24px 18px;border-radius:0}h1{font-size:1.6rem}th,td{padding:8px}nav{padding:12px}}
+@media print{body{background:white}main{box-shadow:none;margin:0;max-width:none;padding:0}nav{display:none}h2,h3{break-after:avoid}tr{break-inside:avoid}.table-scroll{overflow:visible}a{color:inherit;text-decoration:none}table{font-size:9pt}body{font-size:10pt}}
+</style></head><body><main><nav aria-label="目次"><strong>目次</strong><ul><li><a href="#section-3">1. 目的と全体構成</a></li><li><a href="#section-26">2. 画面・回答・統計の仕様</a></li><li><a href="#section-106">3. データ・API・PC収集の設計</a></li><li><a href="#section-132">4. 実装の順序と体制</a></li><li><a href="#section-148">5. 検証・公開条件</a></li><li><a href="#section-168">6. 承認済み実行方法</a></li></ul></nav><article><h1 id="section-0">好きな曲アンケートPWA 計画書・初版</h1>
+<p>作成日：2026年9月30日</p>
+<h2 id="section-3">1. 目的と全体構成</h2>
+<p>知り合い2〜10人が、名前を選んで「ハマった曲」を記録できるアプリを作る。曲の情報と特徴をWeb上の根拠から収集し、個人の好みの変化と全員の人気曲を可視化する。</p>
+<p>PWAをGitHub Pagesで公開する。PCの電源が切れている間もクラウドで回答・解析・統計閲覧を受け付け、PC起動後に全業務データを自動収集する。</p>
+<div class="table-scroll"><table><tr><th>担当</th><th>採用する構成</th></tr><tr><td>公開画面・PWA</td><td>GitHub Pages。React・TypeScript・Viteで実装</td></tr><tr><td>回答受付・権限確認・AI連携</td><td>Cloudflare Workers</td></tr><tr><td>クラウドのSQL保存先</td><td>Cloudflare D1</td></tr><tr><td>Web検索・情報取得</td><td>Tavily API</td></tr><tr><td>情報整理・タグ判定</td><td>Groq APIの <code>qwen/qwen3.8-27b</code></td></tr><tr><td>PCへの収集・SQL分析</td><td>PythonとSQLite</td></tr></table></div>
+<p><strong>無料プランを前提に開始し、有料プランへの自動切り替えは行わない。</strong> Workersには1日10万リクエストと処理ごとのCPU時間制限があるため、AI調査は小さな処理に分ける。無料枠内での実際の動作確認を公開条件にする。<a href="https://developers.cloudflare.com/workers/platform/pricing/">Workers公式料金・制限</a></p>
+<p>D1も無料枠を使用する。無料枠を超えるとデータベース操作が停止し得るため、利用量とエラーを管理者画面で確認できるようにする。<a href="https://developers.cloudflare.com/d1/platform/pricing/">D1公式料金</a></p>
+<p>Tavilyは月1,000クレジットの無料枠を利用する。アプリ側では初期値として月800クレジットを調査の上限にし、残りは確認・再調査の余裕として確保する。<a href="https://www.tavily.com/pricing">Tavily公式料金</a></p>
+<p>Qwenは現在プレビュー扱いなので、モデル名は設定から変更できるようにする。利用停止や制限時にも、保存済みの回答を失わない構成にする。<a href="https://console.groq.com/docs/models">Groq対応モデル</a></p>
+<h2 id="section-26">2. 画面・回答・統計の仕様</h2>
+<h3 id="section-28">通常画面と参加者の操作</h3>
+<ul><li>明るくシンプルなデザインにし、PCとスマートフォンに対応する。</li><li>最初の画面は回答画面。「回答」「みんなの人気曲」「個人統計」を主なタブにする。</li><li>参加者のパスワードは不要。本人の編集権限をブラウザ内に保存する。</li><li>既存の名前は、管理者が発行した個別リンク・QRから初回登録する。新しい名前は作成した端末に編集権限を保存する。</li><li>別端末には専用リンク・QRで権限を追加できる。紛失時は管理者が再発行し、不要な端末の権限を取り消せる。</li><li>閲覧する名前の切り替えと本人の編集権限を分ける。名前を選ぶだけで他人の記録を編集できないようにする。</li><li>同名の新規登録は案内して区別できる名前を入力してもらい、既存の名前へ自動で権限を付与しない。</li></ul>
+<p>回答は曲名入力を基本とし、記録日は今日を初期値にする。過去の日付も指定できる。</p>
+<p>候補が曖昧な場合だけ、ボーカル・発表名義などを示して選択してもらう。見つからなければ「未特定」として保存し、歌手名・URLを任意で補足できる。</p>
+<p>一人が同じ曲・同じバージョンを記録できるのは、1日1件とする。別の日には再び記録できる。本人は自分の曲・バージョン・記録日を変更でき、削除もできる。</p>
+<h3 id="section-44">管理者モードと履歴</h3>
+<p>共通の管理者パスワードでログインすると、管理タブを追加表示する。</p>
+<div class="table-scroll"><table><tr><th>管理項目</th><th>操作</th></tr><tr><td>回答</td><td>全員分の検索・閲覧・編集・削除</td></tr><tr><td>曲・人物情報</td><td>曲の特定、原曲との関連付け、表記の統合、クレジット修正</td></tr><tr><td>タグ</td><td>追加・名称変更・無効化・曲への付与修正</td></tr><tr><td>参加者</td><td>名前の管理、招待・端末権限の発行と取り消し</td></tr><tr><td>データ一覧</td><td>表で検索・絞り込み、詳細表示、フォームによる編集</td></tr><tr><td>変更履歴</td><td>編集・削除・訂正の閲覧と訂正</td></tr><tr><td>運用状況</td><td>AI処理の待機・失敗、利用枠、PCへの収集状況</td></tr></table></div>
+<p>データ変更はフォームから行う。初版ではSQL文の直接実行を管理画面に追加しない。PCのSQLiteではSQLによる検索・分析ができる。</p>
+<p>削除した回答は、通常画面と現在の統計からすぐに外す。一方、管理者向けの履歴には対象者、操作者、操作日時、変更前後の内容を保存する。</p>
+<p>履歴を管理者が訂正した場合も、訂正前の内容と訂正操作を残す。元の履歴を破壊的に上書きせず、画面には訂正を反映した内容を表示する。これらもPCへ収集する。</p>
+<h3 id="section-64">曲情報とタグ付け</h3>
+<p>曲は「原曲」と「歌唱・演奏バージョン」を関連付けて管理する。次の情報を別項目として保持する。</p>
+<ul><li>曲名、原曲との関係、原曲・カバー・リミックスなどの種別</li><li>ボーカル、作曲者、発表名義</li><li>動画の投稿チャンネル、参照URL</li><li>人物・グループの別表記</li><li>情報の参照元、確認日時、調査状態</li></ul>
+<p>倚水／isuiのような別表記を関連付け、作曲者がボカロPであることと、実際の歌声が合成音声であることを区別する。</p>
+<p>Web調査は公式動画の説明、公式サイト、公式の配信・作品情報を優先する。AI結果は自動反映し、管理者が修正できるようにする。確認できない人物情報や、根拠の足りない特徴は未確認として扱う。</p>
+<p>初期タグは以下の<strong>7分類・50個</strong>を採用する。各タグには短い判定基準を持たせ、管理者が後から整理できるようにする。</p>
+<div class="table-scroll"><table><tr><th>分類</th><th>初期タグ</th></tr><tr><td>ジャンル・12個</td><td>J-POP、K-POP、ロック、ポップロック、R&amp;B、ヒップホップ、エレクトロ、ダンスポップ、ジャズ、フォーク、クラシック、メタル</td></tr><tr><td>雰囲気・10個</td><td>明るい、切ない、穏やか、暗い、幻想的、懐かしい、コミカル、爽やか、温かい、緊張感</td></tr><tr><td>勢い・7個</td><td>しっとり、軽快、力強い、激しい、疾走感、ダンサブル、重厚</td></tr><tr><td>テンポ感・3個</td><td>ゆったり、中程度、速い</td></tr><tr><td>歌声の構成・5個</td><td>人の歌声、合成歌声、複数ボーカル、コーラス中心、インスト</td></tr><tr><td>歌声の印象・5個</td><td>透明感、柔らかい、力強い歌声、ささやくような、ハスキー</td></tr><tr><td>歌詞テーマ・8個</td><td>恋愛、別れ、孤独、応援、希望、日常、自己探求、社会・世界</td></tr></table></div>
+<p>音源解析は初版に含めない。曲名や作者名だけから雰囲気を決めず、取得した説明などを根拠に判定する。付与したタグには根拠と判定元を保存し、AI判定と管理者による修正を区別する。</p>
+<h3 id="section-92">統計とオフライン動作</h3>
+<ul><li>人気曲の順位は、<strong>有効な記録の件数</strong>で決める。推している人の名前も表示する。</li><li>原曲単位を初期表示にし、バージョン別へ切り替えられるようにする。同じ順位の曲は同順位として扱う。</li><li>個人統計では、タグ・ジャンルの推移、曲の履歴、ボーカル・作曲者・発表名義別の件数を表示する。</li><li>個人の推移は直近12週間を初期表示にし、件数と割合を切り替えられるようにする。割合の分母は、その期間の全有効記録とする。</li><li>複数タグが付くため、タグの割合の合計が100％を超えることを説明する。未解析件数も表示する。</li><li>今週・日・月・任意期間で集計する。日本時間を使い、週は月曜日開始とする。</li><li>未特定の回答は個人履歴と確認待ち一覧に残す。曲別ランキングへは、特定後に反映する。</li><li>本人の編集・削除は成功直後に画面と統計へ反映する。他端末では画面表示時と、表示中の定期更新で取得する。</li><li>オフラインでは保存済みの共有データを閲覧し、新規回答を送信待ちとして端末に保存する。</li><li>接続回復時、または次回アプリを開いたときに送信する。送信待ちの回答はクラウド統計へまだ反映されていないことを表示する。</li><li>既存記録の編集・削除と管理者操作はオンラインで行う。</li></ul>
+<h2 id="section-106">3. データ・API・PC収集の設計</h2>
+<p>クラウドのD1を更新の基準にし、PCのSQLiteは閲覧・分析・保管用のコピーとする。PCで直接変更した内容をクラウドへ送り返す機能は初版に含めない。</p>
+<p>主要データは、参加者、人物・別表記、原曲、バージョン、クレジット、回答、タグ定義・付与、調査結果・出典、変更履歴、収集用の変更情報に分ける。人物やタグは表示名ではなく内部IDで関連付ける。</p>
+<p>APIは <code>/api/v1</code> 配下にまとめ、次の役割を分ける。</p>
+<div class="table-scroll"><table><tr><th>APIの役割</th><th>権限・動作</th></tr><tr><td>名前・曲候補・共有統計の取得</td><td>通常画面から利用</td></tr><tr><td>名前の作成・招待の受け取り</td><td>端末の本人識別情報を発行</td></tr><tr><td>回答の追加・変更・削除</td><td>端末権限から本人を判定</td></tr><tr><td>管理者ログイン・管理操作</td><td>管理者セッションを必須にする</td></tr><tr><td>PCへの変更データ配信</td><td>収集専用の資格情報を必須にする</td></tr></table></div>
+<p>APIキー・管理者パスワードの検証情報・収集用資格情報はサーバー側で管理し、公開コードに含めない。画面でボタンを隠すだけでなく、API側でも権限を確認する。</p>
+<p>通信の再送には操作IDを使い、二重登録を防ぐ。更新には版番号を使い、別端末や管理者による変更を無言で上書きしない。データ変更と履歴の記録は、一体として保存する。</p>
+<p>AI調査は、回答保存と分離する。D1に永続的な待ち行列を保持し、定期処理で少数ずつ実行する。同じバージョンの調査結果は再利用する。取得失敗・API制限・不正なAI出力は再試行し、解決しないものは管理者の確認待ちにする。モデル、タグ辞書、解析の版を記録し、管理者の修正を再調査で自動上書きしない。</p>
+<p>PCへの収集はWindowsログイン時と5分間隔で実行する。連番の変更情報を取得し、SQLiteへ反映してから収集位置を保存する。中断・再実行でも重複や欠落を起こさないようにする。</p>
+<p>回答、曲、人物、タグ、出典、編集・削除・履歴訂正をすべて収集する。削除状態と変更前の履歴も保持する。日次バックアップを作成し、直近30日分を保管する。</p>
+<h2 id="section-132">4. 実装の順序と体制</h2>
+<p>司令塔は<strong>GPT-6.1 Sol／High</strong>、実装サブエージェントは<strong>GPT-6 Luna／X-High</strong>とする。システムの重要部分の実装はGPT-6.1 Sol／Highが担当する。</p>
+<div class="table-scroll"><table><tr><th>段階</th><th>実装内容・確認する成果</th></tr><tr><td>1. 基盤と契約</td><td>プロジェクト構成、SQL構造、API入出力、権限、テスト用データを司令塔が確定</td></tr><tr><td>2. 回答と管理</td><td>本人登録、回答、編集・削除、管理者モード、変更履歴を実装</td></tr><tr><td>3. 曲の調査</td><td>検索、候補選択、原曲・バージョン、人物情報、タグ判定、再調査を実装</td></tr><tr><td>4. 統計とPWA</td><td>ランキング、個人グラフ、共有閲覧、オフライン保存、更新処理を実装</td></tr><tr><td>5. PC収集と公開</td><td>SQLite収集、バックアップ、実機確認、GitHub Pagesへの公開を実施</td></tr></table></div>
+<p>APIとデータ構造を確定した後、画面、AI調査、PC収集を独立した担当範囲として委任する。共通仕様の変更は司令塔が管理し、各成果をレビュー・統合する。</p>
+<p>セットアップにはGitHub・Cloudflare・Groq・Tavilyのアカウントと、Groq・TavilyのAPIキーを用意する。Cloudflareは無料プランを使い、独自ドメインは購入しない。開発用のNode.js・Python・Gitは、現在のPCに存在することを確認済み。</p>
+<h2 id="section-148">5. 検証・公開条件</h2>
+<p>次の条件を満たして初版を公開する。</p>
+<ul><li>別端末から回答でき、PC停止中も受付・解析・統計閲覧が動作する。</li><li>名前を切り替えても他人の記録を編集できない。本人の端末追加・権限取り消しが機能する。</li><li>管理者だけが全員の回答、共通曲情報、タグ、変更履歴を管理できる。</li><li>編集・削除は即時反映され、変更前後と履歴訂正が保存される。</li><li>同日の同じバージョンの重複、通信再送、同時編集を正しく扱う。</li><li>Aさんが3日、Bさんが1日、同じ曲を記録した場合、人気曲の件数は4件となり、推している人は2人と表示される。</li><li>同名曲、カバー、人物の別表記、見つからない曲、URLと曲名の不一致を扱える。</li><li>例示された4曲で、ボーカル・作曲者・発表名義を区別して保存できる。</li><li>AIの根拠不足、API制限、モデル停止が起きても、回答を保持して状態を表示する。</li><li>オフライン回答が再起動後も残り、接続後に1回だけ送信される。</li><li>PC収集を途中で止めても再開でき、クラウドとPCの回答・解析結果・履歴が一致する。</li><li>無料Workers上で認証・調査・集計を実測し、上限による停止時の挙動を確認する。</li><li>公開後のPC Chrome、Android Chrome、iPhone Safariで、回答・編集・インストール・再起動後の保存・オフライン動作を確認する。実機で未確認の項目は確認済みと区別して記録する。</li></ul>
+<p>初版の範囲は、回答・Web調査・タグ・共有統計・管理者機能・PC収集までとする。音源解析、PCからの双方向更新、アプリ内のSQL直接実行は追加開発として扱う。</p>
+<h2 id="section-168">6. 承認済み実行方法</h2>
+<p>本計画全文を単体HTML <code>docs/好きな曲アンケートPWA_計画書.html</code> として保存する。目次、表、印刷用表示を付ける。Superpowersの writing-plans、subagent-driven-development、test-driven-development、requesting-code-review、verification-before-completion に従う。</p>
+<p>GPT-6.1 Sol／Highは全体設計、SQL・API契約、認証・権限、変更履歴、同期と競合処理、重要部分の実装、統合・レビューを担当する。GPT-6 Luna／X-Highは確定した仕様に沿った回答画面、統計画面、管理画面、PWAの表示・操作、周辺機能とテストを担当する。</p>
+<p>資格情報が必要になるまでローカルで実装・検証を進め、クラウド設定後に無料枠で動作確認してGitHub Pagesへ公開する。計画HTML、公開URL、検証結果、未確認の実機項目を報告する。</p></article><footer>承認済み計画／2026年9月30日。単体で閲覧・印刷できます。実装と検証の状況はREADMEと検証記録を参照してください。</footer></main></body></html>

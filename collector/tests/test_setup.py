@@ -113,6 +113,41 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(setup.classify_workers_plan(['malformed']), 'unknown')
         self.assertEqual(setup.classify_workers_plan({'not':'a list'}), 'unknown')
 
+    def test_incomplete_plan_metadata_is_unknown_and_paid_dominates_every_order(self):
+        paid = {'rate_plan': {'id':'workers_paid', 'public_name':'Workers Paid'}}
+        incomplete = [{}, {'rate_plan': {}}, {'rate_plan': {'id':'','public_name':' '}},
+                      {'rate_plan': {'id':42}}, {'rate_plan': None}, 'malformed']
+        for bad in incomplete:
+            with self.subTest(bad=bad):
+                self.assertEqual(setup.classify_workers_plan([bad]), 'unknown')
+                self.assertEqual(setup.classify_workers_plan([bad, paid]), 'paid')
+                self.assertEqual(setup.classify_workers_plan([paid, bad]), 'paid')
+
+    def test_confirmation_flag_cannot_override_detected_paid_workers_or_mutate_resources(self):
+        for confirm in [False, True]:
+            with self.subTest(confirm=confirm), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / '.local').mkdir()
+                (root / '.local' / 'setup.json').write_text(json.dumps(dict(admin_password='fixture-human',
+                    groq_api_key='fixture-groq', tavily_api_key='fixture-tavily')))
+                calls = []
+                class Cloud:
+                    def request(self, path, method='GET', body=None):
+                        calls.append((method,path))
+                        if path.endswith('/subscriptions'):
+                            return ['malformed', {'rate_plan': {'id':'workers_paid','public_name':'Workers Paid'}}]
+                        if '/d1/database?' in path or path.endswith('/workers/scripts'):
+                            return []
+                        raise AssertionError('Unexpected mutation')
+                class Runner:
+                    def wr(self, *args, **kwargs):
+                        raise AssertionError('Wrangler mutation must not be reached')
+                with patch.object(setup, 'cloud_context', return_value=('a'*32, Cloud())):
+                    with self.assertRaises(setup.SetupError):
+                        setup.cloud_setup(root, Runner(), confirm_free=confirm)
+                self.assertEqual(calls, [('GET', '/accounts/' + 'a'*32 + '/subscriptions')])
+                self.assertEqual(sorted(p.name for p in (root / '.local').iterdir()), ['setup.json'])
+
     def test_existing_unrelated_resources_rejected_before_creation_or_deploy(self):
         with self.assertRaises(setup.SetupError):
             setup.verify_resource_ownership([{'name':'favorite-song-survey', 'uuid':'unrelated'}], [], None)

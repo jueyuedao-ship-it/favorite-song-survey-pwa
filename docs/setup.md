@@ -23,7 +23,7 @@ npm.cmd run setup:check
 
 `setup:check` は秘密値を表示せず、設定の完備・Cloudflare認証・対象リソースの有無・Workersプランを返します。Cloudflare OAuthはインストール済みWranglerのOSキーチェーンから内部で取得し、子プロセス出力は画面へ流さず、Wranglerのディスクログとテレメトリーも無効にします。セットアップは本物のGroq/Tavilyへのリクエストを発行しません。各サービスの無料アカウントとQwenモデル利用の確認は配備前の実確認が必要です。
 
-Workersプランの取得には読み取り権限が必要です。APIが権限不足なら `workers_plan:unknown` とし、Freeとは扱いません。Cloudflareダッシュボードで **Workers Free** を確認できた場合だけ、次のcloud実行に `-- --confirm-workers-free` を付けられます。有料Workersプランを検出した場合は、この指定があっても停止します。ツールに課金・購読を変更する処理はありません。
+Workersプランの取得には読み取り権限が必要です。成功したアカウント購読一覧が空の配列の場合は、有料Workersを含む購読がないため既定のFreeと判定します。欠けた行・不正なラベル・APIの権限不足は `workers_plan:unknown` とし、Freeとは扱いません。一覧をすべて確認し、有料Workersが1件でもあれば不明な行の位置にかかわらずPaidを優先します。Cloudflareダッシュボードで **Workers Free** を事前に確認できた場合だけ、次のcloud実行に `-- --confirm-workers-free` を付けられます。有料Workersプランを検出した場合は、この指定があっても停止します。ツールに課金・購読を変更する処理はありません。
 
 ## 2. 新しいクラウド環境
 

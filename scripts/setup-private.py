@@ -86,16 +86,33 @@ def prepare_secrets(root):
 def classify_workers_plan(subscriptions):
     if not isinstance(subscriptions, list):
         return 'unknown'
+    # Only the complete successful subscriptions result is passed here. An empty
+    # list means the account has no subscriptions (including Workers Paid), so
+    # the Workers default is Free. Missing/malformed rows are NOT an empty list.
+    unknown, paid = False, False
     for subscription in subscriptions:
         if not isinstance(subscription, dict):
-            return 'unknown'
-        plan = subscription.get('rate_plan', {})
+            unknown = True
+            continue
+        plan = subscription.get('rate_plan')
         if not isinstance(plan, dict):
-            return 'unknown'
-        label = (str(plan.get('id', '')) + ' ' + str(plan.get('public_name', ''))).lower()
+            unknown = True
+            continue
+        labels = []
+        for key in ['id', 'public_name']:
+            if key in plan:
+                if isinstance(plan[key], str) and plan[key].strip():
+                    labels.append(plan[key].strip().lower())
+                else:
+                    unknown = True
+        if not labels:
+            unknown = True
+            continue
+        label = ' '.join(labels)
         if 'worker' in label and ('free' not in label or any(word in label for word in ['paid', 'standard', 'bundled', 'unbound', 'enterprise'])):
-            return 'paid'
-    return 'free'
+            paid = True
+    # Scan all entries: Paid must dominate unknown regardless of entry order.
+    return 'paid' if paid else 'unknown' if unknown else 'free'
 
 
 def verify_resource_ownership(databases, workers, state):

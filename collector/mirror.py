@@ -172,7 +172,7 @@ class Mirror:
         return not more
 
     def acknowledge(self, value, collector_id, cursor):
-        if not isinstance(value, dict) or value.get('collector_id') != collector_id or value.get('schema_version') != 1 or value.get('cursor') != cursor or cursor > self.cursor or cursor < self.ack_cursor:
+        if not isinstance(value, dict) or value.get('collector_id') != collector_id or not integer(value.get('schema_version')) or value['schema_version'] != 1 or not integer(value.get('cursor')) or value['cursor'] != cursor or not integer(cursor) or cursor > self.cursor or cursor < self.ack_cursor:
             raise MirrorError('Invalid acknowledgement; local checkpoint retained')
         with self.connection:
             self.set_meta('ack_cursor', cursor)

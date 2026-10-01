@@ -90,6 +90,21 @@ class MirrorTests(unittest.TestCase):
         with closing(sqlite3.connect(Path(self.tmp.name) / 'mirror.sqlite')) as verify:
             self.assertEqual(verify.execute('SELECT count(*) FROM participants').fetchone()[0], 1)
 
+    def test_ack_schema_and_cursor_require_exact_safe_integers(self):
+        self.db.accept(page([event(1, 'participants', row('p', name='残す'))], 1))
+        correct = row('sync', collector_id='pc', cursor=1, schema_version=1)
+        invalid = [dict(correct, schema_version=True), dict(correct, cursor=True),
+                   dict(correct, schema_version=1.0), dict(correct, cursor=1.0),
+                   dict(correct, cursor=-1), dict(correct, cursor=9007199254740992)]
+        for value in invalid:
+            with self.subTest(value=value):
+                with self.assertRaises(mirror.MirrorError):
+                    self.db.acknowledge(value, 'pc', 1)
+                self.assertEqual(self.db.ack_cursor, 0)
+                self.assertEqual(self.db.cursor, 1)
+        self.db.acknowledge(correct, 'pc', 1)
+        self.assertEqual(self.db.ack_cursor, 1)
+
     def test_repeated_page_and_revision_regression_rejected_without_loss(self):
         first = page([event(1, 'participants', row('p', name='元'))], 1)
         self.db.accept(first)

@@ -1724,3 +1724,344 @@ it("keeps only matching native title from capped multilingual candidates", async
   ]);
   expect((await allRows(db, "sources")).map((s) => s.url)).toEqual([canonical]);
 });
+it.each([
+  { author: "Vocal: Alice", name: "Alice", role: "vocalist" },
+  { author: "Music: Bob", name: "Bob", role: "composer" },
+  { author: "Artist: Band", name: "Band", role: "release_name" },
+  { author: "Channel: Other", name: "Other", role: "uploader" },
+])(
+  "rejects role-shaped structured author $author as ordinary attribution",
+  async (c) => {
+    const song = { ...liveSongs[0], author: c.author },
+      canonical = `https://www.youtube.com/watch?v=${song.id}`;
+    await answer(song.title, canonical);
+    await measuredLiveDrain(
+      liveFixture(song, {
+        analysis: {
+          recordings: [
+            {
+              title: song.native,
+              reference_url: canonical,
+              kind: "original",
+              source_id: "s0",
+              quote: song.title,
+              credits: [
+                {
+                  name: c.name,
+                  kind: "person",
+                  role: c.role,
+                  source_id: "s0",
+                  quote: c.author,
+                  aliases: [],
+                },
+              ],
+              tags: [],
+            },
+          ],
+        },
+      }),
+    );
+    expect(await allRows(db, "credits")).toHaveLength(0);
+    expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+    expect((await allRows(db, "research_jobs"))[0].status).toBe("needs_review");
+  },
+);
+it("preserves independently retrieved recording attribution even when author field has the same text", async () => {
+  const song = { ...liveSongs[0], author: "Vocal: Alice" },
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  await measuredLiveDrain(
+    liveFixture(song, {
+      raw: "Vocal: Alice",
+      analysis: {
+        recordings: [
+          {
+            title: song.native,
+            reference_url: canonical,
+            kind: "original",
+            source_id: "s0",
+            quote: song.title,
+            credits: [
+              {
+                name: "Alice",
+                kind: "person",
+                role: "vocalist",
+                source_id: "s0",
+                quote: "Vocal: Alice",
+                aliases: [],
+              },
+            ],
+            tags: [],
+          },
+        ],
+      },
+    }),
+  );
+  expect((await allRows(db, "credits"))[0]).toMatchObject({
+    role: "vocalist",
+    confirmed: true,
+  });
+});
+it("cache native recording title overrides unrelated title mentions in its description", async () => {
+  const song = liveSongs[2],
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  const first = await answer(song.title, canonical);
+  await measuredLiveDrain(
+    liveFixture(song, { raw: "Description: Related song テレパシ" }),
+  );
+  const original = (await allRows(db, "versions"))[0];
+  expect(original.research_status).toBe("complete");
+  const second = await answer("テレパシ", canonical);
+  await measuredLiveDrain(liveFixture(song));
+  const answers = await allRows(db, "responses");
+  expect(answers.find((r) => r.id === first.id)?.version_id).toBe(original.id);
+  expect(answers.find((r) => r.id === second.id)?.version_id).toBeNull();
+  const reviewed = (await allRows(db, "research_jobs")).find(
+    (j) => j.response_id === second.id,
+  )!;
+  expect(reviewed).toMatchObject({
+    status: "needs_review",
+    last_error: "RECORDING_TITLE_CONFLICT",
+  });
+  expect((await allRows(db, "versions"))[0].research_status).toBe("complete");
+});
+it("cache never treats a description-only title mention as identity without native metadata", async () => {
+  await answer();
+  const f = (async (i: any, b: any) =>
+    String(i).endsWith("/extract")
+      ? json({
+          results: [
+            {
+              url,
+              raw_content:
+                evidence + " Description: Other title is a different song",
+            },
+          ],
+        })
+      : provider(i, b)) as typeof fetch;
+  await measuredLiveDrain(f);
+  const second = await answer("Other title", url);
+  await measuredLiveDrain(f);
+  expect(
+    (await allRows(db, "responses")).find((r) => r.id === second.id)
+      ?.version_id,
+  ).toBeNull();
+});
+it("accepts exact public Spica live credits with handles and compound composer roles", async () => {
+  const fixture = JSON.parse(
+    await readFile("worker/tests/research-live-spica-fixture.json", "utf8"),
+  );
+  expect(() =>
+    validateAnalysis(
+      JSON.stringify(fixture.analysis),
+      fixture.sources,
+      fixture.query,
+      fixture.tags,
+    ),
+  ).not.toThrow();
+  await answer(fixture.query.title, fixture.query.reference_url);
+  const j = (await allRows(db, "research_jobs"))[0];
+  await db
+    .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+    .bind(
+      JSON.stringify({ ...j, stage: "infer", evidence: fixture.sources }),
+      j.id,
+    )
+    .run();
+  const f = (async (i: any, b: any) =>
+    String(i).includes("api.groq.com")
+      ? json({
+          choices: [{ message: { content: JSON.stringify(fixture.analysis) } }],
+        })
+      : provider(i, b)) as typeof fetch;
+  await measuredLiveDrain(f);
+  const credits = await allRows(db, "credits"),
+    entities = await allRows(db, "entities");
+  expect(
+    credits.map((c) => ({
+      role: c.role,
+      name: entities.find((e) => e.id === c.entity_id)!.name,
+    })),
+  ).toEqual(
+    expect.arrayContaining([
+      { role: "vocalist", name: "Ninjin" },
+      { role: "composer", name: "Nayutan Seijin" },
+      { role: "uploader", name: "ロクデナシ" },
+    ]),
+  );
+  expect((await allRows(db, "tag_assignments"))[0]).toMatchObject({
+    tag_id: "tag-33",
+    confirmed: true,
+  });
+});
+it.each([
+  "Music & Arrangement: Nayutan Seijin @officialnayutalien1318",
+  "Words, Music & Arrangement: Nayutan Seijin @officialnayutalien1318",
+  "作詞・作曲・編曲: Nayutan Seijin @officialnayutalien1318",
+  "Music & lyric：Nayutan Seijin @officialnayutalien1318",
+])("accepts complete compound composer attribution %s", (quote) => {
+  expect(explicitCredit(quote, "Nayutan Seijin", "composer")).toBe(true);
+  expect(explicitCredit(quote, "Nayutan", "composer")).toBe(false);
+});
+it.each([
+  "Vocal: Ninjin Junior @ninzin_official",
+  "Vocal: Ninjin / Another @ninzin_official",
+  "Vocal: Ninjin & Another @ninzin_official",
+  "Vocal: Ninjin, Another @ninzin_official",
+])("never clips a complete credited name at social handle/list %s", (quote) => {
+  expect(explicitCredit(quote, "Ninjin", "vocalist")).toBe(false);
+});
+it.each([
+  { author: "Music: Bob", name: "Bob", role: "composer" },
+  { author: "Vocal: Alice", name: "Alice", role: "vocalist" },
+])("rejects nested $role text inside a retrieved channel header", async (c) => {
+  const song = { ...liveSongs[0], author: c.author },
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  await measuredLiveDrain(
+    liveFixture(song, {
+      raw: `Channel: ${c.author} (verified)\nDescription`,
+      analysis: {
+        recordings: [
+          {
+            title: song.native,
+            reference_url: canonical,
+            kind: "original",
+            source_id: "s0",
+            quote: song.title,
+            credits: [
+              {
+                name: c.name,
+                kind: "person",
+                role: c.role,
+                source_id: "s0",
+                quote: c.author,
+                aliases: [],
+              },
+            ],
+            tags: [],
+          },
+        ],
+      },
+    }),
+  );
+  expect(await allRows(db, "credits")).toHaveLength(0);
+  expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+});
+it("keeps partial recording facts with empty tags and unknown kind while preserving the raw caption", async () => {
+  const song = liveSongs[2],
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  await measuredLiveDrain(
+    liveFixture(song, {
+      raw: "Vocal: isui\nMusic: tazuneru",
+      analysis: {
+        recordings: [
+          {
+            title: song.title,
+            reference_url: canonical,
+            kind: "other",
+            original: null,
+            source_id: "s0",
+            quote: song.title,
+            credits: [
+              {
+                name: "isui",
+                kind: "person",
+                role: "vocalist",
+                source_id: "s0",
+                quote: "Vocal: isui",
+                aliases: [],
+              },
+            ],
+            tags: [],
+          },
+        ],
+      },
+    }),
+  );
+  const version = (await allRows(db, "versions"))[0];
+  expect(version).toMatchObject({
+    title: song.title,
+    kind: "other",
+    research_status: "needs_review",
+    reference_url: canonical,
+  });
+  expect((await allRows(db, "credits")).map((c) => c.role)).toEqual([
+    "vocalist",
+  ]);
+  expect(await allRows(db, "tag_assignments")).toHaveLength(0);
+  expect((await allRows(db, "sources"))[0].metadata?.title).toBe(song.native);
+});
+it("keeps explicit featured-title vocalist evidence without promoting arbitrary title role labels", async () => {
+  const song = liveSongs[3],
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  await measuredLiveDrain(
+    liveFixture(song, {
+      analysis: {
+        recordings: [
+          {
+            title: song.title,
+            reference_url: canonical,
+            kind: "original",
+            source_id: "s0",
+            quote: song.title,
+            credits: [
+              {
+                name: "初音ミク",
+                kind: "synthetic_voice",
+                role: "vocalist",
+                source_id: "s0",
+                quote: "feat. 初音ミク",
+                aliases: [],
+              },
+            ],
+            tags: [],
+          },
+        ],
+      },
+    }),
+  );
+  expect((await allRows(db, "credits"))[0]).toMatchObject({
+    role: "vocalist",
+    confirmed: true,
+  });
+  const misleading = { ...liveSongs[0], native: "スピカ / Music: Bob" },
+    other = `https://www.youtube.com/watch?v=${misleading.id}`;
+  const second = await answer(misleading.title, other);
+  await measuredLiveDrain(
+    liveFixture(misleading, {
+      raw: misleading.native,
+      analysis: {
+        recordings: [
+          {
+            title: misleading.title,
+            reference_url: other,
+            kind: "original",
+            source_id: "s0",
+            quote: misleading.title,
+            credits: [
+              {
+                name: "Bob",
+                kind: "person",
+                role: "composer",
+                source_id: "s0",
+                quote: "Music: Bob",
+                aliases: [],
+              },
+            ],
+            tags: [],
+          },
+        ],
+      },
+    }),
+  );
+  expect(
+    (await allRows(db, "responses")).find((r) => r.id === second.id)
+      ?.version_id,
+  ).toBeNull();
+  expect(
+    (await allRows(db, "credits")).some((c) => c.role === "composer"),
+  ).toBe(false);
+});

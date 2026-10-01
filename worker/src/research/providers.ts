@@ -65,7 +65,7 @@ export function explicitCredit(
     {
       role: "composer",
       pattern:
-        "lyrics\\s*(?:&|and)\\s*music|music\\s*(?:&|and)\\s*lyrics|composed\\s+by|composer|composition|music|作詞[&/・と]作曲|作曲(?:者)?",
+        "(?:(?:words|lyrics?)\\s*(?:,|&|and)\\s*)?music(?:\\s*(?:&|and)\\s*(?:lyrics?|arrangement))?|composed\\s+by|composer|composition|作詞[&/・と]作曲(?:[&/・と]編曲)?|作曲(?:[&/・と]編曲)?(?:者)?",
     },
     {
       role: "vocalist",
@@ -140,8 +140,39 @@ export function explicitCredit(
     // Only a known following role marker permits a terminal sentence separator.
     // Interior punctuation and spaces remain part of the complete credited value.
     const bounded = markers[i + 1] ? value.replace(/\.\s*$/, "").trim() : value;
-    return complete(value) || complete(bounded);
+    const withoutHandles = (v: string) =>
+      v.replace(/(?:\s+@[a-z0-9_][a-z0-9_.-]*)+\s*$/i, "").trim();
+    return (
+      complete(value) ||
+      complete(bounded) ||
+      complete(withoutHandles(value)) ||
+      complete(withoutHandles(bounded))
+    );
   });
+}
+export const recordingTitleMatches = (actual: string, requested: string) =>
+  norm(actual).includes(norm(requested));
+/** The metadata JSON prefix is a distinct field origin, never recording-credit prose. */
+function independentText(source: Evidence, role?: CreditRole) {
+  const fields = source.metadata ? JSON.stringify(source.metadata) + "\n" : "";
+  const text = source.content.startsWith(fields)
+    ? source.content.slice(fields.length)
+    : "";
+  return text
+    .split(/\r?\n/)
+    .filter((line) => {
+      if (norm(line) === norm(source.metadata?.title ?? source.title))
+        return false;
+      if (/^\s*(?:title|song title|タイトル|曲名)\s*[:：]/i.test(line))
+        return false;
+      return (
+        role === "uploader" ||
+        !/^\s*(?:channel|uploader|uploaded by|チャンネル|投稿者)\s*[:：]/i.test(
+          line,
+        )
+      );
+    })
+    .join("\n");
 }
 export function requestTokenEstimate(body: unknown) {
   let estimate = 256;
@@ -284,8 +315,8 @@ export function validateAnalysis(
     if (
       !norm(s.content).includes(norm(r.title)) ||
       !norm(s.content).includes(norm(query.title)) ||
-      !norm(r.title).includes(norm(query.title)) ||
-      (s.metadata && !norm(s.metadata.title).includes(norm(query.title))) ||
+      !recordingTitleMatches(r.title, query.title) ||
+      (s.metadata && !recordingTitleMatches(s.metadata.title, query.title)) ||
       (query.reference_url && catalogUrl(query.reference_url) !== url!)
     )
       fail();
@@ -325,11 +356,23 @@ export function validateAnalysis(
         c.name === m.author_name &&
         c.quote === m.author_name &&
         c.aliases.length === 0;
-      if (
-        !structuredUploader &&
-        !explicitCredit(c.quote, c.name, c.role, c.aliases)
-      )
-        fail();
+      const feature = c.quote.match(/(?:^|\s)(?:feat(?:uring)?\.?)\s+/i);
+      const caption = m?.title ?? creditedSource.title;
+      const titleVocalist =
+        c.role === "vocalist" &&
+        feature &&
+        norm(caption).includes(norm(c.quote)) &&
+        explicitCredit(
+          c.quote.slice(feature.index!),
+          c.name,
+          c.role,
+          c.aliases,
+        );
+      const prose = independentText(creditedSource, c.role);
+      const ordinaryCredit =
+        norm(prose).includes(norm(c.quote)) &&
+        explicitCredit(c.quote, c.name, c.role, c.aliases);
+      if (!structuredUploader && !titleVocalist && !ordinaryCredit) fail();
       for (const a of c.aliases) {
         if (
           typeof a.name !== "string" ||
@@ -351,7 +394,8 @@ export function validateAnalysis(
       const tagSource = quote(t.source_id, t.quote, url!);
       if (
         tagSource.metadata &&
-        norm(JSON.stringify(tagSource.metadata)).includes(norm(t.quote))
+        norm(JSON.stringify(tagSource.metadata)).includes(norm(t.quote)) &&
+        !norm(independentText(tagSource)).includes(norm(t.quote))
       )
         fail();
       if (

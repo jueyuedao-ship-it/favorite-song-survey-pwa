@@ -19,7 +19,13 @@ import {
 } from "../store";
 import { catalogUrl } from "../catalog";
 import { jstToday } from "../statistics";
-import { providerJson, ResearchError, norm } from "./providers";
+import {
+  providerJson,
+  ResearchError,
+  norm,
+  recordingTitleMatches,
+  youtubeMetadataEndpoint,
+} from "./providers";
 export const actor = { id: "research", type: "system" as const };
 export const operation = () => ({ operation_id: crypto.randomUUID() });
 export async function rows<T>(
@@ -312,6 +318,38 @@ export async function cached(
     "json_extract(data,'$.version_id')=?",
     v.id,
   );
+  const canonical = catalogUrl(q.reference_url)!;
+  const primary = sources.filter((s) => s.url === canonical);
+  const native = primary.filter(
+    (s) =>
+      s.metadata?.provider === "youtube_oembed" &&
+      s.metadata.endpoint === youtubeMetadataEndpoint(canonical),
+  );
+  if (
+    native.length &&
+    !native.some((s) => recordingTitleMatches(s.metadata.title, q.title))
+  ) {
+    if (!job.query?.reference_url) return false;
+    await save(env, job, {
+      status: "needs_review",
+      last_error: "RECORDING_TITLE_CONFLICT",
+      evidence: native
+        .slice(0, 3)
+        .map((s, i) => ({
+          id: `s${i}`,
+          url: s.url,
+          title: s.title,
+          content: s.excerpt,
+          metadata: s.metadata,
+        })),
+    });
+    return true;
+  }
+  const identified = native.length
+    ? native.some((s) => recordingTitleMatches(s.metadata.title, q.title))
+    : recordingTitleMatches(v.title, q.title) ||
+      primary.some((s) => recordingTitleMatches(s.title, q.title));
+  if (!identified) return false;
   if (!sources.some((s) => norm(s.excerpt).includes(norm(q.title))))
     return false;
   if (

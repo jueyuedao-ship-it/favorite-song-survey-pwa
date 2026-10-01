@@ -1,0 +1,74 @@
+{
+  "analysis": {
+    "recordings": [
+      {
+        "credits": [
+          {
+            "aliases": [],
+            "kind": "channel",
+            "name": "ロクデナシ",
+            "quote": "ロクデナシ",
+            "role": "uploader",
+            "source_id": "s0"
+          },
+          {
+            "aliases": [],
+            "kind": "person",
+            "name": "Ninjin",
+            "quote": "Vocal: Ninjin @ninzin_official",
+            "role": "vocalist",
+            "source_id": "s0"
+          },
+          {
+            "aliases": [],
+            "kind": "person",
+            "name": "Nayutan Seijin",
+            "quote": "Words, Music & Arrangement: Nayutan Seijin @officialnayutalien1318",
+            "role": "composer",
+            "source_id": "s0"
+          }
+        ],
+        "kind": "original",
+        "original": null,
+        "quote": "ロクデナシ「スピカ」/ Rokudenashi - Spica【Official Music Video】",
+        "reference_url": "https://www.youtube.com/watch?v=Ol1o3dgPIbI",
+        "source_id": "s0",
+        "tags": [
+          {
+            "quote": "Vocal: Ninjin @ninzin_official",
+            "reasoning": "The quote 'Vocal: Ninjin @ninzin_official' explicitly identifies a human vocalist, which directly satisfies the definition of '人の歌声' (human singing voice).",
+            "source_id": "s0",
+            "tag_id": "tag-33"
+          }
+        ],
+        "title": "ロクデナシ「スピカ」/ Rokudenashi - Spica【Official Music Video】"
+      }
+    ]
+  },
+  "query": {
+    "title": "スピカ",
+    "artist_hint": null,
+    "reference_url": "https://www.youtube.com/watch?v=Ol1o3dgPIbI"
+  },
+  "tags": [
+    {
+      "id": "tag-33",
+      "category": "歌声構成",
+      "name": "人の歌声"
+    }
+  ],
+  "sources": [
+    {
+      "id": "s0",
+      "url": "https://www.youtube.com/watch?v=Ol1o3dgPIbI",
+      "title": "ロクデナシ「スピカ」/ Rokudenashi - Spica【Official Music Video】",
+      "content": "{\"provider\":\"youtube_oembed\",\"endpoint\":\"https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DOl1o3dgPIbI&format=json\",\"title\":\"ロクデナシ「スピカ」/ Rokudenashi - Spica【Official Music Video】\",\"author_name\":\"ロクデナシ\"}\nRokudenashi - Spica【Official Music Video】\nChannel: Rokudenashi (verified)\nDescription\nInstrumental (Piapro): \nX:   / rokudenashi_nzn  \nVocal: Ninjin @ninzin_official\nWords, Music & Arrangement: Nayutan Seijin @officialnayutalien1318\nVocal: Ninjin @ninzin_official. Music & Arrangement: Nayutan Seijin. Rokudenashi - Spica【Official Music Video】 @Rokudenashi_ninzin356K s48M",
+      "metadata": {
+        "provider": "youtube_oembed",
+        "endpoint": "https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DOl1o3dgPIbI&format=json",
+        "title": "ロクデナシ「スピカ」/ Rokudenashi - Spica【Official Music Video】",
+        "author_name": "ロクデナシ"
+      }
+    }
+  ]
+}

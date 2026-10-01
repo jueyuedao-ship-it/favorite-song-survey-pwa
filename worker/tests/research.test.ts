@@ -2818,6 +2818,7 @@ it.each([
   "作曲：Alice",
   "Words, Music & Arrangement: Bob",
   "作詞・作曲・編曲: Bob",
+  "The music was composed by Alice.",
 ])(
   "never derives voice quality from optional-array-independent bare credit %s",
   async (creditQuote) => {
@@ -2954,3 +2955,64 @@ it("aligns fresh and migrated classical tag definition while preserving its ID/n
   const migrated = (await allRows(db, "tags")).find((t) => t.id === "tag-11")!;
   expect(migrated.criterion).toBe(classical.criterion);
 });
+
+it.each([
+  { quote: "The music is bright refreshing dance pop.", tag: "tag-08" },
+  { quote: "The vocals are clear and transparent.", tag: "tag-38" },
+])(
+  "retains ordinary music/vocals descriptive prose $quote as evidence and confirmed tags",
+  async (example) => {
+    const { hasDescriptors } = await import("../src/research/providers");
+    const song = liveSongs[2],
+      canonical = `https://www.youtube.com/watch?v=${song.id}`;
+    expect(
+      hasDescriptors(
+        [
+          {
+            id: "s0",
+            url: canonical,
+            title: song.native,
+            content: `${song.native}\nDescription\n${example.quote}`,
+          },
+        ],
+        canonical,
+      ),
+    ).toBe(true);
+    await answer(song.title, canonical);
+    await measuredLiveDrain(
+      liveFixture(song, {
+        raw: `${song.native}\nDescription\n${example.quote}`,
+        analysis: {
+          recordings: [
+            {
+              title: song.title,
+              reference_url: canonical,
+              kind: "original",
+              original: null,
+              source_id: "s0",
+              quote: song.title,
+              credits: [],
+              tags: [
+                {
+                  tag_id: example.tag,
+                  source_id: "s0",
+                  quote: example.quote,
+                  reasoning:
+                    "The description establishes the musical sound or vocal quality of this recording.",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      38,
+    );
+    expect((await allRows(db, "tag_assignments"))[0]).toMatchObject({
+      tag_id: example.tag,
+      confirmed: true,
+    });
+    expect((await allRows(db, "research_results"))[0].review_warnings).toEqual(
+      [],
+    );
+  },
+);

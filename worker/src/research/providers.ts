@@ -76,12 +76,26 @@ const creditGroups: { role: CreditRole; pattern: string }[] = [
   },
 ];
 
-const creditMarkerPattern =
-  "(?<![\\p{L}\\p{N}_])(" +
-  creditGroups.map((g) => g.pattern).join("|") +
-  ")(?:\\s*[:.\\-–—]\\s*|\\s+)";
+const creditRolePattern =
+  "(?:" + creditGroups.map((g) => g.pattern).join("|") + ")";
 function hasCreditAttribution(value: string) {
-  return new RegExp(creditMarkerPattern, "u").test(norm(value));
+  const text = value.normalize("NFKC").toLocaleLowerCase("ja");
+  // Explicit field separators attribute a role. A bare whitespace form is a
+  // credit only at a clause beginning, never the ordinary "the music/vocals ..."
+  // in descriptive prose. Copulas after a leading role word also indicate prose.
+  return (
+    new RegExp(
+      "(?<![\\p{L}\\p{N}_])" + creditRolePattern + "\\s*[:\\-–—]",
+      "u",
+    ).test(text) ||
+    new RegExp(
+      "(?:^|[;；\\n。])\\s*" +
+        creditRolePattern +
+        "\\s+(?!(?:is|are|was|were|has|have|sounds?|feels?)\\b)\\S",
+      "u",
+    ).test(text) ||
+    /\b(?:composed|produced|uploaded)\s+by\s+\S/u.test(text)
+  );
 }
 /** Only a complete name directly attributed by the matching role clause is accepted. */
 export function explicitCredit(
@@ -251,7 +265,7 @@ export function hasDescriptors(
   return evidence.some(
     (s) =>
       (!recording || linkedRecording(s, recording)) &&
-      /\b(?:pop|rock|dance|jazz|folk|ballad|electronic|hip.hop|metal|bright|dark|warm|gentle|calm|upbeat|melancholic|refreshing|energetic|soft|powerful|tempo|chorus|instrumental)\b|ジャンル|曲調|ポップ|ロック|ダンス|切な|爽やか|穏やか|透明感|ハスキー|疾走感|バラード/i.test(
+      /\b(?:pop|rock|dance|jazz|folk|ballad|electronic|hip.hop|metal|bright|dark|warm|gentle|calm|upbeat|melancholic|refreshing|energetic|soft|powerful|clear|transparent|tempo|chorus|instrumental)\b|ジャンル|曲調|ポップ|ロック|ダンス|切な|爽やか|穏やか|透明感|ハスキー|疾走感|バラード/i.test(
         independentText(s)
           .split(/\r?\n/)
           .filter(

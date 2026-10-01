@@ -32,3 +32,16 @@ TDD: all 9 focused regressions failed for the reported defects before implementa
 - `git diff --check -- worker/src/research/providers.ts worker/schema/0002_tags.sql worker/schema/0004_tag_criteria.sql worker/tests/research.test.ts .superpowers/sdd/favorite-song-survey/task-model-reliability-report.md` — passed for owned files; root-owned dirty docs excluded.
 
 No whole-suite rerun was performed in this fix round as instructed; the release coordinator owns the final integrated run after the other app changes. No private data/live providers/deployment/UI/collector/root docs were touched. Original full-suite and release-limit distinctions above remain applicable.
+
+
+## Scoped review fix round 2 (BASE 349e71f)
+
+Read model-reliability-fix-1-review.md. The four original findings remain addressed; fixed the one descriptive-prose classification regression introduced by round 1. Bare whitespace-only role labels now require a clause beginning, and copulas indicate ordinary prose. Explicit punctuated Japanese/compound credit labels and explicit composed/produced/uploaded-by attribution remain non-descriptive credit provenance. The normal sentences “The music is bright refreshing dance pop.” and “The vocals are clear and transparent.” now count as descriptions and save their confirmed tags on real D1 without review warnings. The predicate recognizes clear/transparent descriptors alongside the existing vocabulary.
+
+TDD: both ordinary-prose positives failed before implementation, then passed through real-D1 publication alongside three previous optional-array credit negatives (5 passed). A preservation check for “The music was composed by Alice.” failed when whitespace matching was initially narrowed, then passed after retaining explicit by-name attribution. Final relevant run and typecheck:
+
+- npm.cmd test -- worker/tests/research.test.ts -t 'ordinary music/vocals descriptive|optional-array-independent bare|supported alias beside|captured native metadata/lyrics/resource|as a recording description|fresh and migrated classical|nonliteral|voice|compound composer|complete compound|role/name|structured author|multiline channel|first nonempty|whole actual channel|descriptors|retains independently supported actual' — 43 passed / 93 skipped (44.81s).
+- npm.cmd run typecheck — passed.
+- git diff --check -- worker/src/research/providers.ts worker/tests/research.test.ts .superpowers/sdd/favorite-song-survey/task-model-reliability-report.md — passed for owned paths.
+
+No whole-suite rerun, private data/live-provider access, deployment, UI/collector or root-doc edits occurred. The release coordinator owns final integrated verification.

@@ -556,8 +556,14 @@ export function recordingWindows(raw: string) {
       descriptionHeader.test(usable[i])
     ) {
       selected.add(i);
-      if (/[:：]\s*$/.test(usable[i]) && i + 1 < usable.length)
-        selected.add(i + 1);
+      if (
+        /[:：]\s*$/.test(usable[i]) ||
+        (fieldHeader.test(usable[i]) && !/[:：]/.test(usable[i]))
+      ) {
+        let value = i + 1;
+        while (value < usable.length && !usable[value].trim()) value++;
+        if (value < usable.length) selected.add(value);
+      }
     }
   const windows = [...selected].map((i) => usable[i]).join("\n");
   return (windows || usable.slice(0, 6).join("\n")).slice(0, 1000);

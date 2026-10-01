@@ -2254,3 +2254,52 @@ it("preserves Japanese header/value context through extraction windows", async (
   );
   expect(await allRows(db, "credits")).toHaveLength(0);
 });
+it.each([
+  { header: "Channel", section: "Description", gap: "" },
+  { header: "チャンネル", section: "概要", gap: "" },
+  { header: "Channel", section: "Description", gap: "\n" },
+  { header: "チャンネル:", section: "概要", gap: "\n" },
+])(
+  "preserves first nonempty $header value before genuine description credit (gap=$gap)",
+  async (c) => {
+    const song = { ...liveSongs[0], author: "Bob" },
+      canonical = `https://www.youtube.com/watch?v=${song.id}`;
+    await answer(song.title, canonical);
+    await measuredLiveDrain(
+      liveFixture(song, {
+        raw: `${c.header}\n${c.gap}Bob\n${c.section}\nMusic: Carol`,
+        analysis: {
+          recordings: [
+            {
+              title: song.native,
+              reference_url: canonical,
+              kind: "original",
+              source_id: "s0",
+              quote: song.title,
+              credits: [
+                {
+                  name: "Carol",
+                  kind: "person",
+                  role: "composer",
+                  source_id: "s0",
+                  quote: "Music: Carol",
+                  aliases: [],
+                },
+              ],
+              tags: [],
+            },
+          ],
+        },
+      }),
+    );
+    const credit = (await allRows(db, "credits"))[0];
+    expect(credit).toMatchObject({ role: "composer", confirmed: true });
+    expect((await allRows(db, "entities"))[0].name).toBe("Carol");
+    const source = (await allRows(db, "sources")).find(
+      (s) => s.id === credit.source_id,
+    )!;
+    expect(source.excerpt).toContain(
+      `${c.header}\nBob\n${c.section}\nMusic: Carol`,
+    );
+  },
+);

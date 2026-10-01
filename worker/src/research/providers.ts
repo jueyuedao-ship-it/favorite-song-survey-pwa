@@ -49,7 +49,12 @@ export class ResearchError extends Error {
 export const norm = (s: string) =>
   s.normalize("NFKC").toLocaleLowerCase("ja").replace(/\s+/g, " ").trim();
 /** Only a complete name directly attributed by the matching role clause is accepted. */
-export function explicitCredit(quote: string, name: string, role: CreditRole) {
+export function explicitCredit(
+  quote: string,
+  name: string,
+  role: CreditRole,
+  aliases: { name: string; quote: string }[] = [],
+) {
   if (!norm(name)) return false;
   const groups: { role: CreditRole; pattern: string }[] = [
     {
@@ -82,13 +87,42 @@ export function explicitCredit(quote: string, name: string, role: CreditRole) {
       ),
     ),
   ];
-  const escaped = norm(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const complete = new RegExp(
-    "(?:^|[,/&・(「【])\\s*" +
-      escaped +
-      "(?=$|\\s*[,/&・)」】!?。]|\\.(?=\\s|$))",
-    "u",
-  );
+  const complete = (value: string) => {
+    const attributed = norm(value);
+    const credited = norm(name);
+    if (attributed === credited) return true;
+    // A punctuation-bearing credited name is one complete value. Slash/comma/&
+    // never establish separate people. Explicit whole-value alias forms may match.
+    return aliases.some((a) => {
+      if (typeof a.name !== "string" || typeof a.quote !== "string")
+        return false;
+      const alternate = norm(a.name),
+        proof = norm(a.quote);
+      const pair = (v: string) => v.replace(/\s*\/\s*/g, "/");
+      const bilingual =
+        (/[a-z]/i.test(credited) &&
+          /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(
+            alternate,
+          )) ||
+        (/[a-z]/i.test(alternate) &&
+          /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(
+            credited,
+          ));
+      if (bilingual) {
+        const forms = [credited + "/" + alternate, alternate + "/" + credited];
+        if (
+          forms.includes(pair(attributed)) &&
+          pair(proof) === pair(attributed)
+        )
+          return true;
+      }
+      const forms = [
+        `${credited} (aka ${alternate})`,
+        `${credited} (also known as ${alternate})`,
+      ];
+      return forms.includes(attributed) && proof === attributed;
+    });
+  };
   return markers.some((m, i) => {
     const matched = groups.find((g) =>
       new RegExp("^(?:" + g.pattern + ")$", "u").test(m[1]),
@@ -98,7 +132,10 @@ export function explicitCredit(quote: string, name: string, role: CreditRole) {
       .slice(m.index! + m[0].length, markers[i + 1]?.index ?? input.length)
       .split(/[;；\n。]/)[0]
       .trim();
-    return complete.test(value);
+    // Only a known following role marker permits a terminal sentence separator.
+    // Interior punctuation and spaces remain part of the complete credited value.
+    const bounded = markers[i + 1] ? value.replace(/\.\s*$/, "").trim() : value;
+    return complete(bounded);
   });
 }
 export function requestTokenEstimate(body: unknown) {
@@ -276,7 +313,7 @@ export function validateAnalysis(
       )
         fail();
       quote(c.source_id, c.quote, url!);
-      if (!explicitCredit(c.quote, c.name, c.role)) fail();
+      if (!explicitCredit(c.quote, c.name, c.role, c.aliases)) fail();
       for (const a of c.aliases) {
         if (
           typeof a.name !== "string" ||

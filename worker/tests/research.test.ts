@@ -1050,3 +1050,144 @@ it.each([
     ),
   ).toThrow();
 });
+it.each([
+  { name: "AC", role: "vocalist", quote: "Vocal: AC/DC" },
+  { name: "DC", role: "vocalist", quote: "Vocal: AC/DC" },
+  { name: "Mrs", role: "release_name", quote: "Artist: Mrs. GREEN APPLE" },
+])("rejects clipped punctuation artist $name from $quote", async (c) => {
+  await answer();
+  model.recordings[0].credits = [
+    { ...c, kind: "group", source_id: "s0", aliases: [] },
+  ];
+  model.recordings[0].tags = [];
+  const f = (async (i: any, b: any) =>
+    String(i).endsWith("/extract")
+      ? json({
+          results: [{ url, raw_content: "Blue Song official. " + c.quote }],
+        })
+      : provider(i, b)) as typeof fetch;
+  for (let i = 0; i < 25; i++) await run(env(), undefined, f);
+  expect(await allRows(db, "credits")).toHaveLength(0);
+  expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+});
+it.each([
+  { name: "AC/DC", role: "vocalist", quote: "Vocal: AC/DC" },
+  {
+    name: "Mrs. GREEN APPLE",
+    role: "release_name",
+    quote: "Artist: Mrs. GREEN APPLE",
+  },
+])("preserves complete punctuation artist $name", (c) => {
+  expect(() =>
+    validateAnalysis(
+      JSON.stringify({
+        recordings: [
+          {
+            title: "Blue Song",
+            reference_url: url,
+            kind: "original",
+            source_id: "s0",
+            quote: "Blue Song official",
+            credits: [{ ...c, kind: "group", source_id: "s0", aliases: [] }],
+            tags: [],
+          },
+        ],
+      }),
+      [
+        {
+          id: "s0",
+          url,
+          title: "Blue Song",
+          content: "Blue Song official. " + c.quote,
+        },
+      ],
+      { title: "Blue Song", reference_url: null },
+      [],
+    ),
+  ).not.toThrow();
+});
+it.each([
+  { name: "AC", alternate: "DC", quote: "Vocal: AC/DC" },
+  { name: "Alice", alternate: "Bob", quote: "Vocal: Alice / Bob" },
+])(
+  "keeps ambiguous same-script separator identities unconfirmed $quote",
+  (c) => {
+    expect(() =>
+      validateAnalysis(
+        JSON.stringify({
+          recordings: [
+            {
+              title: "Blue Song",
+              reference_url: url,
+              kind: "original",
+              source_id: "s0",
+              quote: "Blue Song official",
+              credits: [
+                {
+                  name: c.name,
+                  role: "vocalist",
+                  kind: "group",
+                  source_id: "s0",
+                  quote: c.quote,
+                  aliases: [{ name: c.alternate, quote: c.quote.slice(7) }],
+                },
+              ],
+              tags: [],
+            },
+          ],
+        }),
+        [
+          {
+            id: "s0",
+            url,
+            title: "Blue Song",
+            content: "Blue Song official. " + c.quote,
+          },
+        ],
+        { title: "Blue Song", reference_url: null },
+        [],
+      ),
+    ).toThrow();
+  },
+);
+it("preserves explicitly stated same-script alias evidence", () => {
+  const quote = "Vocal: Alice (also known as Ally)";
+  expect(() =>
+    validateAnalysis(
+      JSON.stringify({
+        recordings: [
+          {
+            title: "Blue Song",
+            reference_url: url,
+            kind: "original",
+            source_id: "s0",
+            quote: "Blue Song official",
+            credits: [
+              {
+                name: "Alice",
+                role: "vocalist",
+                kind: "person",
+                source_id: "s0",
+                quote,
+                aliases: [
+                  { name: "Ally", quote: "Alice (also known as Ally)" },
+                ],
+              },
+            ],
+            tags: [],
+          },
+        ],
+      }),
+      [
+        {
+          id: "s0",
+          url,
+          title: "Blue Song",
+          content: "Blue Song official. " + quote,
+        },
+      ],
+      { title: "Blue Song", reference_url: null },
+      [],
+    ),
+  ).not.toThrow();
+});

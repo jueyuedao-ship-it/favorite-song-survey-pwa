@@ -12,7 +12,15 @@
     "build:api": "wrangler deploy --dry-run --outdir dist/worker",
     "build:web": "vite build --config vite.config.ts",
     "icons:render": "node web/render-icons.mjs",
-    "db:migrate:local": "wrangler d1 migrations apply favorite-song-survey --local"
+    "db:migrate:local": "wrangler d1 migrations apply favorite-song-survey --local",
+    "test:collector": "python -m unittest discover -s collector/tests -v",
+    "setup:check": "python scripts/setup-private.py check",
+    "setup:cloud": "python scripts/setup-private.py cloud",
+    "setup:collector": "python scripts/setup-private.py collector",
+    "setup:github": "python scripts/setup-private.py github",
+    "setup:ci": "node scripts/setup-ci.mjs",
+    "collector:once": "python collector/mirror.py once --config .local/collector.json",
+    "collector:watch": "python collector/mirror.py watch --config .local/collector.json"
   },
   "dependencies": {
     "qrcode": "^1.5.4",

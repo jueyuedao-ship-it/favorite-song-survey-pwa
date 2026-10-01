@@ -41,6 +41,8 @@ export interface Recording {
 }
 export interface Analysis {
   recordings: Recording[];
+  raw_model?: string;
+  review_warnings?: string[];
 }
 export class ResearchError extends Error {
   constructor(
@@ -152,6 +154,51 @@ export function explicitCredit(
 }
 export const recordingTitleMatches = (actual: string, requested: string) =>
   norm(actual).includes(norm(requested));
+/** Links must be observed in the retrieved document, never supplied by the query. */
+export function linkedRecording(source: Evidence, recording: string) {
+  if (source.url === recording) return true;
+  return [...source.content.matchAll(/https:\/\/[^\s<>"\]\)]+/g)].some(
+    ([link]) => {
+      try {
+        return catalogUrl(link.replace(/&amp;/g, "&")) === recording;
+      } catch {
+        return false;
+      }
+    },
+  );
+}
+
+export function knownIdentitySchema(
+  evidence: Evidence[],
+  query: {
+    title: string;
+    reference_url: string | null;
+    artist_hint?: string | null;
+  },
+) {
+  const schema = structuredClone(analysisSchema);
+  let canonical: string | null;
+  try {
+    canonical = catalogUrl(query.reference_url);
+  } catch {
+    return schema;
+  }
+  if (!canonical) return schema;
+  const known = evidence.find(
+    (s) =>
+      s.url === canonical &&
+      s.metadata?.provider === "youtube_oembed" &&
+      s.metadata.endpoint === youtubeMetadataEndpoint(canonical) &&
+      recordingTitleMatches(s.metadata.title, query.title) &&
+      (!query.artist_hint || norm(s.content).includes(norm(query.artist_hint))),
+  );
+  if (known)
+    Object.assign((schema.properties as any).recordings, {
+      minItems: 1,
+      maxItems: 1,
+    });
+  return schema;
+}
 const fieldHeader =
   /^\s*(?:channel|uploader|uploaded by|title|song title|チャンネル|投稿者|タイトル|曲名)(?:\s*[:：]|\s*$)/i;
 const descriptionHeader =
@@ -188,6 +235,26 @@ function independentText(source: Evidence, role?: CreditRole) {
       return true;
     })
     .join("\n");
+}
+export function hasDescriptors(
+  evidence: Evidence[],
+  recording?: string | null,
+) {
+  return evidence.some(
+    (s) =>
+      (!recording || linkedRecording(s, recording)) &&
+      /\b(?:pop|rock|dance|jazz|folk|ballad|electronic|hip.hop|metal|bright|dark|warm|gentle|calm|upbeat|melancholic|refreshing|energetic|soft|powerful|tempo|chorus|instrumental)\b|ジャンル|曲調|ポップ|ロック|ダンス|切な|爽やか|穏やか|透明感|ハスキー|疾走感|バラード/i.test(
+        independentText(s)
+          .split(/\r?\n/)
+          .filter(
+            (line) =>
+              !/^\s*(?:vocal|music|artist|composer|歌唱|作曲)\s*[:：]/i.test(
+                line,
+              ),
+          )
+          .join("\n"),
+      ),
+  );
 }
 export function requestTokenEstimate(body: unknown) {
   let estimate = 256;
@@ -294,7 +361,7 @@ export function validateAnalysis(
       q.length < 3 ||
       q.length > 400 ||
       !norm(s.content).includes(norm(q)) ||
-      (s.url !== recording && !s.content.includes(recording))
+      !linkedRecording(s, recording)
     )
       fail();
     return s!;
@@ -346,7 +413,7 @@ export function validateAnalysis(
       if (!o.reference_url || o.reference_url === url) fail();
       const relationship = quote(o.source_id, o.quote, url!);
       if (
-        !relationship.content.includes(o.reference_url) ||
+        !linkedRecording(relationship, o.reference_url) ||
         !norm(o.quote).includes(norm(o.title)) ||
         !/cover|remix|original|カバー|原曲|リミックス/i.test(o.quote)
       )
@@ -383,7 +450,12 @@ export function validateAnalysis(
           c.role,
           c.aliases,
         );
-      const prose = independentText(creditedSource, c.role);
+      // Trusted native author fields settle header attribution. Role-looking
+      // substrings of those channel headers cannot establish another uploader.
+      const prose = independentText(
+        creditedSource,
+        m && c.role === "uploader" ? undefined : c.role,
+      );
       const ordinaryCredit =
         norm(prose).includes(norm(c.quote)) &&
         explicitCredit(c.quote, c.name, c.role, c.aliases);
@@ -408,9 +480,29 @@ export function validateAnalysis(
       if (!tag) fail();
       const tagSource = quote(t.source_id, t.quote, url!);
       if (!norm(independentText(tagSource)).includes(norm(t.quote))) fail();
+      const creditQuote = r.credits.find(
+        (c: Claim) => norm(c.quote) === norm(t.quote),
+      );
+      const factualVoice =
+        creditQuote?.role === "vocalist" &&
+        ((tag!.name === "人の歌声" &&
+          ["person", "group"].includes(creditQuote.kind)) ||
+          (tag!.name === "合成歌声" && creditQuote.kind === "synthetic_voice"));
+      if (creditQuote && !factualVoice) fail();
+      // Names/role lines and lyrics do not describe the sound or mood. Only the
+      // established factual voice type may be supported by a bare vocal credit.
       if (
-        !tag!.category?.startsWith("歌声") &&
-        r.credits.some((c: Claim) => norm(c.quote) === norm(t.quote))
+        !factualVoice &&
+        /(?:\b(?:vocal|music|artist|composer|lyrics?)\s*[:：]|歌唱\s*[:：]|\[\d+:\d+\])/i.test(
+          t.quote,
+        )
+      )
+        fail();
+      if (
+        tag!.category !== "歌詞テーマ" &&
+        /\blyrics?\b|歌詞|\b(?:i|you|me|we)\b.*\b(?:dance|sleep|love|forget)\b/i.test(
+          `${t.reasoning} ${t.quote}`,
+        )
       )
         fail();
       if (
@@ -423,13 +515,125 @@ export function validateAnalysis(
         typeof t.reasoning !== "string" ||
         t.reasoning.length < 15 ||
         t.reasoning.length > 500 ||
-        !norm(t.reasoning).includes(norm(t.quote)) ||
-        !norm(t.reasoning).includes(norm(tag!.name))
+        !/[\p{L}]/u.test(t.reasoning)
       )
         fail();
     }
   }
   return value;
+}
+
+/** Identity is atomic; enrichment claims are individually reviewed and filtered. */
+export function supportedAnalysis(
+  raw: string,
+  evidence: Evidence[],
+  query: Parameters<typeof validateAnalysis>[2],
+  tags: Parameters<typeof validateAnalysis>[3],
+): Analysis {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ResearchError("INVALID_MODEL_JSON");
+  }
+  if (
+    !parsed ||
+    !Array.isArray(parsed.recordings) ||
+    parsed.recordings.some(
+      (r: any) =>
+        !r ||
+        !Array.isArray(r.credits) ||
+        r.credits.length > 4 ||
+        !Array.isArray(r.tags) ||
+        r.tags.length > 5,
+    )
+  )
+    throw new ResearchError("UNSUPPORTED_EVIDENCE");
+  const identity = validateAnalysis(
+    JSON.stringify({
+      recordings: parsed.recordings.map((r: any) => ({
+        ...r,
+        credits: [],
+        tags: [],
+      })),
+    }),
+    evidence,
+    query,
+    tags,
+  );
+  const warnings: string[] = [];
+  const test = (r: Recording) =>
+    validateAnalysis(
+      JSON.stringify({ recordings: [r] }),
+      evidence,
+      query,
+      tags,
+    );
+  identity.recordings.forEach((r, index) => {
+    const original = parsed.recordings[index];
+    original.credits.forEach((claim: Claim, n: number) => {
+      try {
+        let c = structuredClone(claim);
+        const s = evidence.find((s) => s.id === c.source_id),
+          m = s?.metadata;
+        if (
+          m?.provider === "youtube_oembed" &&
+          m.endpoint === youtubeMetadataEndpoint(r.reference_url) &&
+          s &&
+          linkedRecording(s, r.reference_url) &&
+          c.role === "uploader" &&
+          c.kind === "channel" &&
+          c.name === m.author_name &&
+          Array.isArray(c.aliases) &&
+          c.aliases.length === 0 &&
+          typeof c.quote === "string" &&
+          norm(s.content).includes(norm(c.quote))
+        )
+          c.quote = m.author_name;
+        const acceptedAliases: Claim["aliases"] = [];
+        // First validate role attribution with all aliases (some complete bilingual
+        // credit forms need their explicit alias proof), then check aliases singly.
+        test({ ...r, credits: [c], tags: [] });
+        for (const a of c.aliases) {
+          try {
+            test({ ...r, credits: [{ ...c, aliases: [a] }], tags: [] });
+            acceptedAliases.push(a);
+          } catch {
+            warnings.push(
+              `recording:${index}:credit:${n}:alias:UNSUPPORTED_EVIDENCE`,
+            );
+          }
+        }
+        c.aliases = acceptedAliases;
+        r.credits.push(c);
+      } catch {
+        // A bad alias must not discard an otherwise ordinary explicit attribution.
+        try {
+          const c = { ...claim, aliases: [] };
+          test({ ...r, credits: [c], tags: [] });
+          r.credits.push(c);
+          warnings.push(
+            `recording:${index}:credit:${n}:aliases:UNSUPPORTED_EVIDENCE`,
+          );
+        } catch {
+          warnings.push(`recording:${index}:credit:${n}:UNSUPPORTED_EVIDENCE`);
+        }
+      }
+    });
+    original.tags.forEach((t: Recording["tags"][number], n: number) => {
+      try {
+        test({ ...r, tags: [t] });
+        r.tags.push(t);
+      } catch {
+        warnings.push(`recording:${index}:tag:${n}:UNSUPPORTED_EVIDENCE`);
+      }
+    });
+  });
+  return {
+    ...identity,
+    raw_model: raw,
+    review_warnings: warnings.slice(0, 24),
+  };
 }
 export async function providerJson(
   fetcher: typeof fetch,
@@ -566,5 +770,24 @@ export function recordingWindows(raw: string) {
       }
     }
   const windows = [...selected].map((i) => usable[i]).join("\n");
-  return (windows || usable.slice(0, 6).join("\n")).slice(0, 1000);
+  const content = windows || usable.slice(0, 6).join("\n");
+  // The bounded excerpt must retain real recording links even when a long
+  // descriptive paragraph pushes them past its first 1000 characters.
+  const links = [...content.matchAll(/https:\/\/[^\s<>"\]\)]+/g)]
+    .map(([link]) => link)
+    .filter((link) => {
+      try {
+        return Boolean(youtubeMetadataEndpoint(catalogUrl(link)!));
+      } catch {
+        return false;
+      }
+    })
+    .filter((link, i, all) => all.indexOf(link) === i)
+    .slice(0, 4);
+  const suffix = links
+    .filter((link) => !content.slice(0, 1000).includes(link))
+    .join("\n");
+  return suffix
+    ? `${content.slice(0, 999 - suffix.length)}\n${suffix}`
+    : content.slice(0, 1000);
 }

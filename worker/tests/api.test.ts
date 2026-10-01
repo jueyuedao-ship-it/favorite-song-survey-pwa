@@ -5,6 +5,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { pbkdf2Sync, createHash } from "node:crypto";
 import worker from "../src/index";
 import type { WorkerEnv } from "../../shared/contracts";
+import { registerRuntimeTransport } from "./miniflare-transport";
+let closeTransport: () => Promise<void>;
 
 let mf: Miniflare;
 let db: D1Database;
@@ -219,6 +221,7 @@ beforeAll(async () => {
       },
     }),
   );
+  closeTransport = await registerRuntimeTransport(mf);
   db = (await mf.getD1Database("DB")) as unknown as D1Database;
 });
 beforeEach(async () => {
@@ -250,6 +253,7 @@ beforeEach(async () => {
 });
 afterAll(async () => {
   await mf?.dispose();
+  await closeTransport();
 });
 
 describe("D1 HTTP capability and mutation integrity", () => {

@@ -6,9 +6,11 @@ import {
   reserveCredits as reserve,
 } from "../src/research/runner";
 import { newRow, allRows } from "../src/store";
-import { researchJob, safeUrl, candidates } from "../src/catalog";
+import { researchJob, safeUrl, candidates, songDetail } from "../src/catalog";
 import type { WorkerEnv, ResearchJob } from "../../shared/contracts";
+import { registerRuntimeTransport } from "./miniflare-transport";
 let mf: Miniflare, db: D1Database;
+let closeTransport: () => Promise<void>;
 let calls: string[];
 let model: any;
 const url = "https://www.youtube.com/watch?v=abcdefghijk";
@@ -102,7 +104,7 @@ async function wake() {
       )
       .run();
 }
-beforeAll(async () => {
+async function createRuntime() {
   mf = new Miniflare(
     convertV4MiniflareOptions({
       modules: true,
@@ -111,9 +113,18 @@ beforeAll(async () => {
       d1Databases: ["DB"],
     }),
   );
+  closeTransport = await registerRuntimeTransport(mf);
   db = (await mf.getD1Database("DB")) as unknown as D1Database;
-});
+}
+beforeAll(createRuntime);
+let fixtureRuns = 0;
 beforeEach(async () => {
+  // Periodic real runtime disposal also releases the bounded fixture pool.
+  if (++fixtureRuns % 20 === 0) {
+    await mf.dispose();
+    await closeTransport();
+    await createRuntime();
+  }
   const tables = await db
     .prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'",
@@ -166,6 +177,7 @@ beforeEach(async () => {
 });
 afterAll(async () => {
   await mf.dispose();
+  await closeTransport();
 });
 it("resolves unknown title with recording-specific sources, credits, aliases and feed", async () => {
   const r = await answer();
@@ -208,8 +220,12 @@ it.each([
   if (mode === "mismatch") model.recordings[0].title = "Different song";
   await drain();
   expect((await allRows(db, "research_jobs"))[0].status).toBe("needs_review");
-  expect((await allRows(db, "responses"))[0].version_id).toBeNull();
-  expect(await allRows(db, "credits")).toHaveLength(0);
+  if (["unlisted tag", "unsupported credit"].includes(mode))
+    expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
+  else expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+  expect(await allRows(db, "credits")).toHaveLength(
+    mode === "unlisted tag" ? 1 : 0,
+  );
 });
 it("publishes multiple candidates without merging titles", async () => {
   await answer();
@@ -446,7 +462,7 @@ it("rejects title-only irrelevant tag evidence", async () => {
     },
   ];
   await drain();
-  expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+  expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
   expect(await allRows(db, "tag_assignments")).toHaveLength(0);
 });
 it("links a cover to an explicitly evidenced original recording", async () => {
@@ -671,7 +687,7 @@ it("rejects an unrelated performer attribution as genre evidence", async () => {
     },
   ];
   await drain();
-  expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+  expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
   expect(await allRows(db, "tag_assignments")).toHaveLength(0);
 });
 it("fills canonical recording and uploader metadata on an unlocked known version", async () => {
@@ -907,7 +923,7 @@ it.each([
         : provider(i, b)) as typeof fetch;
     for (let i = 0; i < 25; i++) await run(env(), undefined, f);
     expect(await allRows(db, "credits")).toHaveLength(0);
-    expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+    expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
   },
 );
 it.each([
@@ -1068,7 +1084,7 @@ it.each([
       : provider(i, b)) as typeof fetch;
   for (let i = 0; i < 25; i++) await run(env(), undefined, f);
   expect(await allRows(db, "credits")).toHaveLength(0);
-  expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+  expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
 });
 it.each([
   { name: "AC/DC", role: "vocalist", quote: "Vocal: AC/DC" },
@@ -1762,7 +1778,7 @@ it.each([
       }),
     );
     expect(await allRows(db, "credits")).toHaveLength(0);
-    expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+    expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
     expect((await allRows(db, "research_jobs"))[0].status).toBe("needs_review");
   },
 );
@@ -1807,7 +1823,9 @@ it("cache native recording title overrides unrelated title mentions in its descr
     canonical = `https://www.youtube.com/watch?v=${song.id}`;
   const first = await answer(song.title, canonical);
   await measuredLiveDrain(
-    liveFixture(song, { raw: "Description: Related song テレパシ" }),
+    liveFixture(song, {
+      raw: "Description: Related song テレパシ. bright refreshing pop",
+    }),
   );
   const original = (await allRows(db, "versions"))[0];
   expect(original.research_status).toBe("complete");
@@ -1946,7 +1964,7 @@ it.each([
     }),
   );
   expect(await allRows(db, "credits")).toHaveLength(0);
-  expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+  expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
 });
 it("keeps partial recording facts with empty tags and unknown kind while preserving the raw caption", async () => {
   const song = liveSongs[2],
@@ -2060,7 +2078,7 @@ it("keeps explicit featured-title vocalist evidence without promoting arbitrary 
   expect(
     (await allRows(db, "responses")).find((r) => r.id === second.id)
       ?.version_id,
-  ).toBeNull();
+  ).toBeTruthy();
   expect(
     (await allRows(db, "credits")).some((c) => c.role === "composer"),
   ).toBe(false);
@@ -2103,7 +2121,7 @@ it.each(multilineAuthors)(
       }),
     );
     expect(await allRows(db, "credits")).toHaveLength(0);
-    expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+    expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
     expect((await allRows(db, "research_jobs"))[0].status).toBe("needs_review");
   },
 );
@@ -2303,3 +2321,495 @@ it.each([
     );
   },
 );
+
+it.each([0, 1, 2, 3, 4])(
+  "retains independently supported actual model claims and privileged rejected raw fixture %s",
+  async (index) => {
+    const fixtures = JSON.parse(
+      await readFile(
+        "worker/tests/research-actual-model-fixtures.json",
+        "utf8",
+      ),
+    );
+    const fixture = fixtures[index];
+    await answer(fixture.query.title, fixture.query.reference_url);
+    const j = (await allRows(db, "research_jobs"))[0];
+    await db
+      .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+      .bind(
+        JSON.stringify({ ...j, stage: "infer", evidence: fixture.sources }),
+        j.id,
+      )
+      .run();
+    const f = (async (i: any, init: any) =>
+      String(i).includes("api.groq.com")
+        ? json({ choices: [{ message: { content: fixture.raw } }] })
+        : provider(i, init)) as typeof fetch;
+    await measuredLiveDrain(f, 38);
+    const credits = await allRows(db, "credits");
+    expect(credits.map((c) => c.role)).toEqual(
+      expect.arrayContaining(["uploader", "composer"]),
+    );
+    if (fixture.query.title !== "Overdose")
+      expect(credits.some((c) => c.role === "vocalist")).toBe(true);
+    else expect(credits.some((c) => c.role === "vocalist")).toBe(false);
+    expect(
+      (await allRows(db, "tag_assignments")).some((t) => t.tag_id === "tag-01"),
+    ).toBe(false);
+    if (index === 4)
+      expect(
+        (await allRows(db, "tag_assignments")).some(
+          (t) => t.tag_id === "tag-33",
+        ),
+      ).toBe(true);
+    const result = (await allRows(db, "research_results"))[0];
+    expect(result.raw_model).toBe(fixture.raw);
+    expect((await allRows(db, "responses"))[0].version_id).toBe(
+      result.version_id,
+    );
+    const detail = await songDetail(db, result.version_id);
+    expect(JSON.stringify(detail)).not.toContain("raw_model");
+    if (index === 4) {
+      expect(result.review_warnings?.length ?? 0).toBeGreaterThan(0);
+      expect(detail.version.research_status).toBe("needs_review");
+      expect(JSON.stringify(detail.tags)).not.toContain("J-POP");
+    }
+  },
+);
+
+it("constrains only trusted known supplied identity while credits/tags remain optional", async () => {
+  const song = liveSongs[2];
+  const canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  let capturedSchema: any;
+  const fixture = liveFixture(song);
+  const f = (async (i: any, init: any) => {
+    if (String(i).includes("api.groq.com")) {
+      capturedSchema = JSON.parse(init.body).response_format.json_schema.schema;
+    }
+    return fixture(i, init);
+  }) as typeof fetch;
+  await measuredLiveDrain(f, 38);
+  expect(capturedSchema?.properties.recordings.minItems).toBe(1);
+  expect(capturedSchema.properties.recordings.maxItems).toBe(1);
+  expect(
+    capturedSchema.properties.recordings.items.properties.credits.minItems ?? 0,
+  ).toBe(0);
+  expect(
+    capturedSchema.properties.recordings.items.properties.tags.minItems ?? 0,
+  ).toBe(0);
+});
+
+it.each(["title-only", "missing-metadata", "conflicting-hint"])(
+  "does not force %s identity",
+  async (mode) => {
+    const song = liveSongs[2],
+      canonical = `https://www.youtube.com/watch?v=${song.id}`;
+    await answer(song.title, mode === "title-only" ? null : canonical);
+    if (mode === "conflicting-hint") {
+      const r = (await allRows(db, "responses"))[0],
+        j = (await allRows(db, "research_jobs"))[0];
+      await db
+        .prepare("UPDATE responses SET data=? WHERE id=?")
+        .bind(JSON.stringify({ ...r, artist_hint: "not the artist" }), r.id)
+        .run();
+      await db
+        .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+        .bind(
+          JSON.stringify({
+            ...j,
+            query: { ...j.query, artist_hint: "not the artist" },
+          }),
+          j.id,
+        )
+        .run();
+    }
+    const fixture = liveFixture(song, {
+      metadataStatus: mode === "missing-metadata" ? 503 : 200,
+    });
+    let capturedSchema: any;
+    const f = (async (i: any, init: any) => {
+      if (String(i).includes("api.groq.com")) {
+        capturedSchema = JSON.parse(init.body).response_format.json_schema
+          .schema;
+        return json({
+          choices: [{ message: { content: '{"recordings":[]}' } }],
+        });
+      }
+      return fixture(i, init);
+    }) as typeof fetch;
+    await measuredLiveDrain(f, 38);
+    expect(capturedSchema).toBeTruthy();
+    expect(capturedSchema.properties.recordings.minItems ?? 0).toBe(0);
+    expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+  },
+);
+
+it("keeps canonical corrected entity and locked role during case/alias replay", async () => {
+  const r = await answer();
+  await drain();
+  const person = (await allRows(db, "entities"))[0],
+    credit = (await allRows(db, "credits"))[0];
+  await db
+    .prepare("UPDATE entities SET data=? WHERE id=?")
+    .bind(
+      JSON.stringify({ ...person, name: "Corrected Alice", manual_lock: true }),
+      person.id,
+    )
+    .run();
+  await db
+    .prepare("UPDATE credits SET data=? WHERE id=?")
+    .bind(JSON.stringify({ ...credit, manual_lock: true }), credit.id)
+    .run();
+  await insert("aliases", newRow({ entity_id: person.id, name: "ＡＬＩＣＥ" }));
+  const targetVersion = (await allRows(db, "responses"))[0].version_id;
+  const j = (await allRows(db, "research_jobs")).find(
+    (j) => j.version_id === targetVersion,
+  )!;
+  // Use a version job because the resolved answer is intentionally stale.
+  await db
+    .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+    .bind(
+      JSON.stringify({
+        ...j,
+        status: "queued",
+        response_id: null,
+        version_id: (await allRows(db, "responses"))[0].version_id,
+        query: null,
+        stage: "infer",
+        next_attempt_at: new Date().toISOString(),
+        metadata_cursor: 0,
+        catalog_cursor: 0,
+        candidates: [],
+      }),
+      j.id,
+    )
+    .run();
+  await measuredLiveDrain(provider);
+  expect(await allRows(db, "entities")).toHaveLength(1);
+  expect((await allRows(db, "credits"))[0]).toMatchObject({
+    entity_id: person.id,
+    manual_lock: true,
+  });
+});
+
+it("rejects voice quality inferred only from a vocalist credit but retains factual vocals", async () => {
+  await answer();
+  model.recordings[0].tags = [
+    {
+      tag_id: "tag-38",
+      source_id: "s0",
+      quote: "Vocal: Alice",
+      reasoning: "Vocal: Alice means the voice has 透明感 and an airy quality.",
+    },
+  ];
+  await measuredLiveDrain(provider);
+  expect(await allRows(db, "tag_assignments")).toHaveLength(0);
+  expect(await allRows(db, "credits")).toHaveLength(1);
+});
+
+it("reuses an evidenced alias after canonical person correction without locking the credit edge", async () => {
+  await answer();
+  await drain();
+  const person = (await allRows(db, "entities"))[0];
+  await db
+    .prepare("UPDATE entities SET data=? WHERE id=?")
+    .bind(
+      JSON.stringify({ ...person, name: "Corrected Alice", manual_lock: true }),
+      person.id,
+    )
+    .run();
+  await insert("aliases", newRow({ entity_id: person.id, name: "ＡＬＩＣＥ" }));
+  const targetVersion = (await allRows(db, "versions"))[0].id;
+  const old = (await allRows(db, "research_jobs")).find(
+    (j) => j.version_id === targetVersion,
+  )!;
+  await db
+    .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+    .bind(
+      JSON.stringify({
+        ...old,
+        status: "queued",
+        response_id: null,
+        version_id: (await allRows(db, "versions"))[0].id,
+        query: null,
+        stage: "infer",
+        next_attempt_at: new Date().toISOString(),
+        metadata_cursor: 0,
+        catalog_cursor: 0,
+        candidates: [],
+      }),
+      old.id,
+    )
+    .run();
+  await measuredLiveDrain(provider);
+  expect(await allRows(db, "entities")).toHaveLength(1);
+  expect((await allRows(db, "credits"))[0].entity_id).toBe(person.id);
+  expect((await allRows(db, "entities"))[0]).toMatchObject({
+    name: "Corrected Alice",
+    manual_lock: true,
+  });
+});
+
+it("investigates missing descriptors with a bounded Japanese metadata query and preserves retrieved markdown recording links", async () => {
+  const song = liveSongs[2],
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  const fixture = liveFixture(song, {
+    raw: `${song.native}\nDescription\nVocal: isui\nMusic: tazuneru`,
+  });
+  const descriptive = "https://tayori.example/song/wind";
+  const raw = `${song.title} は爽やかなダンスポップ、fast tempo の楽曲。 [Official Video](https://youtu.be/${song.id})`;
+  const lookupBodies: any[] = [];
+  let searches = 0;
+  const f = (async (i: any, init: any) => {
+    const target = String(i);
+    if (target.endsWith("/search")) {
+      const body = JSON.parse(init.body);
+      lookupBodies.push(body);
+      searches++;
+      if (searches === 2)
+        return json({
+          results: [{ url: descriptive, title: song.title, content: raw }],
+        });
+    }
+    if (
+      target.endsWith("/extract") &&
+      JSON.parse(init.body).urls.includes(descriptive)
+    ) {
+      expect(JSON.parse(init.body).format).toBe("markdown");
+      return json({ results: [{ url: descriptive, raw_content: raw }] });
+    }
+    if (target.includes("api.groq.com")) {
+      const input = JSON.parse(JSON.parse(init.body).messages[1].content);
+      const source = input.sources.find((s: any) => s.url === descriptive);
+      return json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                recordings: [
+                  {
+                    title: song.title,
+                    reference_url: canonical,
+                    kind: "original",
+                    original: null,
+                    source_id: "s0",
+                    quote: song.title,
+                    credits: [],
+                    tags: source
+                      ? [
+                          {
+                            tag_id: "tag-08",
+                            source_id: source.id,
+                            quote: "爽やかなダンスポップ",
+                            reasoning:
+                              "The description explicitly characterizes this recording as a dance pop track.",
+                          },
+                        ]
+                      : [],
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      });
+    }
+    return fixture(i, init);
+  }) as typeof fetch;
+  await measuredLiveDrain(f, 38);
+  expect(searches).toBe(2);
+  expect(lookupBodies[1].query).toContain(song.author);
+  expect(lookupBodies[1].query).not.toContain("youtube.com");
+  expect(lookupBodies[1].query.length).toBeLessThanOrEqual(399);
+  expect((await allRows(db, "tag_assignments"))[0]?.tag_id).toBe("tag-08");
+  expect((await allRows(db, "usage"))[0].tavily_credits).toBe(4);
+});
+
+it.each(["quota", "provider"])(
+  "retains recording facts and answer when descriptive lookup %s fails",
+  async (mode) => {
+    const song = liveSongs[2],
+      canonical = `https://www.youtube.com/watch?v=${song.id}`;
+    const r = await answer(song.title, canonical);
+    const fixture = liveFixture(song);
+    let searches = 0,
+      quotas = 0;
+    const f = (async (i: any, init: any) => {
+      if (String(i).endsWith("/usage") && ++quotas === 3 && mode === "quota")
+        return json({
+          account: {
+            current_plan: "Researcher",
+            plan_usage: 1000,
+            plan_limit: 1000,
+            paygo_usage: 0,
+          },
+          key: { usage: 1000, limit: 1000 },
+        });
+      if (
+        String(i).endsWith("/search") &&
+        ++searches === 2 &&
+        mode === "provider"
+      )
+        return json({}, 503);
+      return fixture(i, init);
+    }) as typeof fetch;
+    await measuredLiveDrain(f, 38);
+    expect(
+      (await allRows(db, "responses")).find((x) => x.id === r.id)?.version_id,
+    ).toBeTruthy();
+    expect(
+      (await allRows(db, "credits")).some((c) => c.role === "uploader"),
+    ).toBe(true);
+    expect(
+      (await allRows(db, "research_results"))[0].review_warnings,
+    ).toContain("DESCRIPTIVE_LOOKUP_UNAVAILABLE");
+  },
+);
+
+it.each(["embed", "shorts", "watch"])(
+  "keeps actual retrieved %s links past descriptor truncation without injecting query identity",
+  async (path) => {
+    const { recordingWindows, linkedRecording } =
+      await import("../src/research/providers");
+    const actual =
+      path === "watch" ? url : `https://www.youtube.com/${path}/abcdefghijk`;
+    const raw =
+      "Description: bright refreshing pop\n" +
+      "Official music release details\n".repeat(60) +
+      `[Official recording](${actual})`;
+    const content = recordingWindows(raw);
+    expect(content).toContain(actual);
+    expect(content.length).toBeLessThanOrEqual(1000);
+    expect(
+      linkedRecording(
+        {
+          id: "s1",
+          url: "https://label.example/release",
+          title: "Blue Song",
+          content,
+        },
+        url,
+      ),
+    ).toBe(true);
+    expect(
+      linkedRecording(
+        {
+          id: "s1",
+          url: "https://label.example/release",
+          title: "Blue Song",
+          content: recordingWindows("Blue Song Official pop release"),
+        },
+        url,
+      ),
+    ).toBe(false);
+  },
+);
+
+it("does not infer genre or mood from standalone lyric text", async () => {
+  const raw =
+    "Blue Song official\nDescription\nThat’s why I dance, sleep, and forget everything";
+  await answer();
+  model.recordings[0].tags = [
+    {
+      tag_id: "tag-28",
+      source_id: "s0",
+      quote: "That’s why I dance, sleep, and forget everything",
+      reasoning:
+        "The lyrics mention dancing and therefore this has a danceable rhythm.",
+    },
+  ];
+  const f = (async (i: any, init: any) =>
+    String(i).endsWith("/extract")
+      ? json({ results: [{ url, raw_content: raw + "\nVocal: Alice" }] })
+      : provider(i, init)) as typeof fetch;
+  await measuredLiveDrain(f);
+  expect(await allRows(db, "tag_assignments")).toHaveLength(0);
+  expect(await allRows(db, "credits")).toHaveLength(1);
+});
+
+it("retains malformed model response only in privileged job review", async () => {
+  await answer();
+  model = "malformed fixture";
+  await drain();
+  const job = (await allRows(db, "research_jobs"))[0];
+  expect(job.status).toBe("needs_review");
+  expect(job.raw_model).toBe("malformed fixture");
+  expect(await allRows(db, "versions")).toHaveLength(0);
+});
+
+it("keeps admin-edited criteria while upgrading untouched generic initial definitions", async () => {
+  const tags = await allRows(db, "tags"),
+    legacy = tags.find((t) => t.id === "tag-08")!,
+    edited = tags.find((t) => t.id === "tag-38")!;
+  const old = `Webの説明・公式情報で「${legacy.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
+  await db
+    .prepare("UPDATE tags SET data=? WHERE id=?")
+    .bind(JSON.stringify({ ...legacy, criterion: old }), legacy.id)
+    .run();
+  await db
+    .prepare("UPDATE tags SET data=? WHERE id=?")
+    .bind(
+      JSON.stringify({
+        ...edited,
+        criterion: "管理者専用の特別な基準",
+        revision: 2,
+      }),
+      edited.id,
+    )
+    .run();
+  const migrations = (await readdir("worker/schema"))
+    .filter((f) => f > "0003_research.sql" && f.endsWith(".sql"))
+    .sort();
+  for (const f of migrations)
+    await db.exec(
+      (await readFile(`worker/schema/${f}`, "utf8"))
+        .replace(/--[^\n]*\n/g, "")
+        .split("\n")
+        .filter((l) => l.trim())
+        .join("\n"),
+    );
+  const saved = await allRows(db, "tags");
+  expect(saved.find((t) => t.id === "tag-08")?.criterion).toContain("ビート");
+  expect(saved.find((t) => t.id === "tag-38")?.criterion).toBe(
+    "管理者専用の特別な基準",
+  );
+  expect(saved).toHaveLength(50);
+});
+
+it("never treats a role-shaped channel header substring as a different uploader", async () => {
+  const song = { ...liveSongs[2], author: "Channel: Other" },
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  await measuredLiveDrain(
+    liveFixture(song, {
+      raw: `Channel: ${song.author} (verified)\nDescription`,
+      analysis: {
+        recordings: [
+          {
+            title: song.title,
+            reference_url: canonical,
+            kind: "original",
+            original: null,
+            source_id: "s0",
+            quote: song.title,
+            credits: [
+              {
+                name: "Other",
+                kind: "channel",
+                role: "uploader",
+                source_id: "s0",
+                quote: "Channel: Other",
+                aliases: [],
+              },
+            ],
+            tags: [],
+          },
+        ],
+      },
+    }),
+    38,
+  );
+  expect(await allRows(db, "credits")).toHaveLength(0);
+});

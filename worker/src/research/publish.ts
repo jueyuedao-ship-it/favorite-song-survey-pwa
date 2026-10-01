@@ -6,7 +6,13 @@ import type {
 } from "../../../shared/contracts";
 import { newRow, updated, getRow, now, type Change } from "../store";
 import { researchJob } from "../catalog";
-import { ResearchError, type Analysis } from "./providers";
+import {
+  ResearchError,
+  linkedRecording,
+  knownIdentitySchema,
+  norm,
+  type Analysis,
+} from "./providers";
 import { rows, save } from "./state";
 /** Publish one recording per invocation, creating its independent metadata job. */
 export async function publishCatalog(
@@ -105,7 +111,11 @@ export async function publishCatalog(
       const values = {
         stage: "metadata" as const,
         evidence: j.evidence,
-        analysis: { recordings: [r] },
+        analysis: {
+          recordings: [r],
+          raw_model: a.raw_model,
+          review_warnings: a.review_warnings,
+        },
         candidates: [candidate],
         metadata_cursor: 0,
         catalog_cursor: 0,
@@ -177,10 +187,8 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
   const evidence = j.evidence!.find((x) => x.id === task.r.source_id)!;
   const changes: Change[] = [];
   if (task.type === "source") {
-    for (const e of j.evidence!.filter(
-      (e) =>
-        e.url === task.r.reference_url ||
-        e.content.includes(task.r.reference_url),
+    for (const e of j.evidence!.filter((e) =>
+      linkedRecording(e, task.r.reference_url),
     )) {
       const existing = (
         await rows<any>(
@@ -224,19 +232,6 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
     if (!source) throw new ResearchError("SOURCE_MISSING");
     if (task.type === "credit") {
       const c = task.c;
-      let entity = (
-        await rows<any>(
-          env.DB,
-          "entities",
-          "json_extract(data,'$.name')=? AND json_extract(data,'$.kind')=?",
-          c.name,
-          c.kind,
-        )
-      )[0];
-      if (!entity) {
-        entity = newRow({ name: c.name, kind: c.kind, manual_lock: false });
-        changes.push({ table: "entities", before: null, after: entity });
-      }
       const existing = await rows<any>(
         env.DB,
         "credits",
@@ -244,6 +239,57 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
         version.id,
         c.role,
       );
+      // A locked role is settled before entity creation; even a different source
+      // spelling must not create a new, unused entity beside an admin correction.
+      if (existing.some((x) => x.manual_lock)) {
+        await save(env, j, { metadata_cursor: cursor + 1 });
+        return;
+      }
+      const entities = await rows<any>(
+        env.DB,
+        "entities",
+        "json_extract(data,'$.kind')=?",
+        c.kind,
+      );
+      const aliases = await rows<any>(env.DB, "aliases");
+      if (entities.length === 60 || aliases.length === 60) {
+        await save(env, j, {
+          metadata_cursor: cursor + 1,
+          analysis: {
+            ...a,
+            review_warnings: [
+              ...(a.review_warnings ?? []),
+              "CANONICAL_ENTITY_LOOKUP_BOUND",
+            ].slice(0, 24),
+          },
+        });
+        return;
+      }
+      const matches = entities.filter(
+        (e) =>
+          norm(e.name) === norm(c.name) ||
+          aliases.some(
+            (a) => a.entity_id === e.id && norm(a.name) === norm(c.name),
+          ),
+      );
+      if (matches.length > 1) {
+        await save(env, j, {
+          metadata_cursor: cursor + 1,
+          analysis: {
+            ...a,
+            review_warnings: [
+              ...(a.review_warnings ?? []),
+              "AMBIGUOUS_CANONICAL_ENTITY",
+            ].slice(0, 24),
+          },
+        });
+        return;
+      }
+      let entity = matches[0];
+      if (!entity) {
+        entity = newRow({ name: c.name, kind: c.kind, manual_lock: false });
+        changes.push({ table: "entities", before: null, after: entity });
+      }
       if (!existing.some((x) => x.manual_lock)) {
         const old = existing.find((x) => x.entity_id === entity.id);
         const values = {
@@ -334,6 +380,8 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
       analysis_version: j.analysis_version,
       source_ids: sources.map((s) => s.id),
       payload: task.r,
+      raw_model: a.raw_model,
+      review_warnings: a.review_warnings ?? [],
     });
     changes.push({ table: "research_results", before: null, after: result });
     if (!version.manual_lock)
@@ -342,7 +390,8 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
         before: version,
         after: updated(version, {
           research_status:
-            task.r.kind === "original" || task.r.original
+            !a.review_warnings?.length &&
+            (task.r.kind === "original" || task.r.original)
               ? "complete"
               : "needs_review",
         }),
@@ -369,7 +418,15 @@ async function finish(env: WorkerEnv, j: ResearchJob) {
     choices.length === 1 &&
     (j.analysis!.recordings[0].kind === "original" ||
       !!j.analysis!.recordings[0].original);
-  if (single && j.response_id) {
+  // Recording identity and metadata review are independent. Rejected secondary
+  // claims cannot leave one validated original recording perpetually unresolved.
+  const suppliedIdentity =
+    j.query?.reference_url &&
+    (knownIdentitySchema(j.evidence!, j.query).properties.recordings as any)
+      .minItems === 1;
+  const approvedIdentity =
+    choices.length === 1 && (single || Boolean(suppliedIdentity));
+  if (approvedIdentity && j.response_id) {
     const r = await getRow(env.DB, "responses", j.response_id);
     changes.push({
       table: "responses",
@@ -381,9 +438,18 @@ async function finish(env: WorkerEnv, j: ResearchJob) {
     env,
     j,
     {
-      status: single ? "complete" : "needs_review",
-      candidates: single ? [] : choices,
-      last_error: single ? null : "CONFIRM_RECORDING_OR_ORIGINAL_LINK",
+      status:
+        single && !j.analysis!.review_warnings?.length
+          ? "complete"
+          : "needs_review",
+      candidates: approvedIdentity ? [] : choices,
+      last_error: j.analysis!.review_warnings?.length
+        ? "UNCONFIRMED_CLAIMS"
+        : single
+          ? null
+          : approvedIdentity
+            ? "CONFIRM_ORIGINAL_RELATIONSHIP"
+            : "CONFIRM_RECORDING_OR_ORIGINAL_LINK",
       stage: "done",
     },
     changes,

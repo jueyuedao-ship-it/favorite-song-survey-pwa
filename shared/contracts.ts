@@ -99,6 +99,8 @@ export interface RecordingMetadata {
   author_name: string;
 }
 export interface ResearchResult extends Row {
+  raw_model?: string;
+  review_warnings?: string[];
   version_id: string;
   model: string;
   dictionary_version: string;
@@ -143,18 +145,26 @@ export interface ResearchRecording {
 }
 export interface ResearchAnalysis {
   recordings: ResearchRecording[];
+  /** Privileged job/result evidence; never copied to public catalog detail. */
+  raw_model?: string;
+  review_warnings?: string[];
 }
 export interface ResearchJob extends Row {
   stage?:
     | "search"
     | "extract"
+    | "describe_search"
+    | "describe_extract"
     | "infer"
     | "catalog"
     | "metadata"
     | "await_versions"
     | "done";
   evidence?: ResearchEvidence[];
+  descriptive_status?: "complete" | "unavailable";
+  descriptive_source_ids?: string[];
   analysis?: ResearchAnalysis;
+  raw_model?: string;
   metadata_cursor?: number;
   catalog_cursor?: number;
   version_id: string | null;

@@ -55,6 +55,34 @@ export class ResearchError extends Error {
 }
 export const norm = (s: string) =>
   s.normalize("NFKC").toLocaleLowerCase("ja").replace(/\s+/g, " ").trim();
+const creditGroups: { role: CreditRole; pattern: string }[] = [
+  {
+    role: "composer",
+    pattern:
+      "(?:(?:words|lyrics?)\\s*(?:,|&|and)\\s*)?music(?:\\s*(?:&|and)\\s*(?:lyrics?|arrangement))?|composed\\s+by|composer|composition|作詞[&/・と]作曲(?:[&/・と]編曲)?|作曲(?:[&/・と]編曲)?(?:者)?",
+  },
+  {
+    role: "vocalist",
+    pattern: "featuring|feat|vocalist|vocals?|歌唱|ボーカル|歌手|歌声|歌",
+  },
+  {
+    role: "release_name",
+    pattern:
+      "produced\\s+by|release\\s+artist|artist|発表名義|名義|アーティスト",
+  },
+  {
+    role: "uploader",
+    pattern: "uploaded\\s+by|uploader|channel|投稿(?:者)?|チャンネル",
+  },
+];
+
+const creditMarkerPattern =
+  "(?<![\\p{L}\\p{N}_])(" +
+  creditGroups.map((g) => g.pattern).join("|") +
+  ")(?:\\s*[:.\\-–—]\\s*|\\s+)";
+function hasCreditAttribution(value: string) {
+  return new RegExp(creditMarkerPattern, "u").test(norm(value));
+}
 /** Only a complete name directly attributed by the matching role clause is accepted. */
 export function explicitCredit(
   quote: string,
@@ -63,32 +91,12 @@ export function explicitCredit(
   aliases: { name: string; quote: string }[] = [],
 ) {
   if (!norm(name)) return false;
-  const groups: { role: CreditRole; pattern: string }[] = [
-    {
-      role: "composer",
-      pattern:
-        "(?:(?:words|lyrics?)\\s*(?:,|&|and)\\s*)?music(?:\\s*(?:&|and)\\s*(?:lyrics?|arrangement))?|composed\\s+by|composer|composition|作詞[&/・と]作曲(?:[&/・と]編曲)?|作曲(?:[&/・と]編曲)?(?:者)?",
-    },
-    {
-      role: "vocalist",
-      pattern: "featuring|feat|vocalist|vocals?|歌唱|ボーカル|歌手|歌声|歌",
-    },
-    {
-      role: "release_name",
-      pattern:
-        "produced\\s+by|release\\s+artist|artist|発表名義|名義|アーティスト",
-    },
-    {
-      role: "uploader",
-      pattern: "uploaded\\s+by|uploader|channel|投稿(?:者)?|チャンネル",
-    },
-  ];
   const input = quote.normalize("NFKC").toLocaleLowerCase("ja");
   const markers = [
     ...input.matchAll(
       new RegExp(
         "(?<![\\p{L}\\p{N}_])(" +
-          groups.map((g) => g.pattern).join("|") +
+          creditGroups.map((g) => g.pattern).join("|") +
           ")(?:\\s*[:.\\-–—]\\s*|\\s+)",
         "gu",
       ),
@@ -131,7 +139,7 @@ export function explicitCredit(
     });
   };
   return markers.some((m, i) => {
-    const matched = groups.find((g) =>
+    const matched = creditGroups.find((g) =>
       new RegExp("^(?:" + g.pattern + ")$", "u").test(m[1]),
     );
     if (matched?.role !== role) return false;
@@ -248,13 +256,41 @@ export function hasDescriptors(
           .split(/\r?\n/)
           .filter(
             (line) =>
-              !/^\s*(?:vocal|music|artist|composer|歌唱|作曲)\s*[:：]/i.test(
+              !hasCreditAttribution(line) &&
+              !/\[\d+:\d+\]|\blyrics?\b|\btranscript\b|歌詞|文字起こし|\b(?:i|you|me|we)\b.*\b(?:dance|sleep|love|forget)\b/i.test(
+                line,
+              ) &&
+              !/^\s*(?:instrumental|inst\.?|オフボーカル|カラオケ)\s*(?:[(:：]|downloads?|https?:|音源)/i.test(
                 line,
               ),
           )
           .join("\n"),
       ),
   );
+}
+
+/** Alias claims are independent of whether their role quote needs an alias. */
+function validateAliasEvidence(
+  c: Claim,
+  a: Claim["aliases"][number],
+  recording: string,
+  evidence: Evidence[],
+) {
+  const source = evidence.find((s) => s.id === c.source_id);
+  if (
+    !a ||
+    typeof a.name !== "string" ||
+    a.name.length > 100 ||
+    typeof a.quote !== "string" ||
+    a.quote.length < 3 ||
+    a.quote.length > 400 ||
+    !source ||
+    !linkedRecording(source, recording) ||
+    !norm(source.content).includes(norm(a.quote)) ||
+    !norm(a.quote).includes(norm(c.name)) ||
+    !norm(a.quote).includes(norm(a.name))
+  )
+    throw new ResearchError("UNSUPPORTED_EVIDENCE");
 }
 export function requestTokenEstimate(body: unknown) {
   let estimate = 256;
@@ -461,18 +497,7 @@ export function validateAnalysis(
         explicitCredit(c.quote, c.name, c.role, c.aliases);
       if (!structuredUploader && !titleVocalist && !ordinaryCredit) fail();
       for (const a of c.aliases) {
-        if (
-          typeof a.name !== "string" ||
-          a.name.length > 100 ||
-          typeof a.quote !== "string"
-        )
-          fail();
-        quote(c.source_id, a.quote, url!);
-        if (
-          !norm(a.quote).includes(norm(c.name)) ||
-          !norm(a.quote).includes(norm(a.name))
-        )
-          fail();
+        validateAliasEvidence(c, a, url!, evidence);
       }
     }
     for (const t of r.tags) {
@@ -493,9 +518,7 @@ export function validateAnalysis(
       // established factual voice type may be supported by a bare vocal credit.
       if (
         !factualVoice &&
-        /(?:\b(?:vocal|music|artist|composer|lyrics?)\s*[:：]|歌唱\s*[:：]|\[\d+:\d+\])/i.test(
-          t.quote,
-        )
+        (hasCreditAttribution(t.quote) || /\[\d+:\d+\]/.test(t.quote))
       )
         fail();
       if (
@@ -591,12 +614,11 @@ export function supportedAnalysis(
         )
           c.quote = m.author_name;
         const acceptedAliases: Claim["aliases"] = [];
-        // First validate role attribution with all aliases (some complete bilingual
-        // credit forms need their explicit alias proof), then check aliases singly.
-        test({ ...r, credits: [c], tags: [] });
+        if (!Array.isArray(c.aliases) || c.aliases.length > 2)
+          throw new ResearchError("UNSUPPORTED_EVIDENCE");
         for (const a of c.aliases) {
           try {
-            test({ ...r, credits: [{ ...c, aliases: [a] }], tags: [] });
+            validateAliasEvidence(c, a, r.reference_url, evidence);
             acceptedAliases.push(a);
           } catch {
             warnings.push(
@@ -605,6 +627,9 @@ export function supportedAnalysis(
           }
         }
         c.aliases = acceptedAliases;
+        // Validate the complete role only after retaining independently supported
+        // aliases, including the subset needed by an explicit bilingual caption.
+        test({ ...r, credits: [c], tags: [] });
         r.credits.push(c);
       } catch {
         // A bad alias must not discard an otherwise ordinary explicit attribution.

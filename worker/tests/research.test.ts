@@ -2813,3 +2813,144 @@ it("never treats a role-shaped channel header substring as a different uploader"
   );
   expect(await allRows(db, "credits")).toHaveLength(0);
 });
+
+it.each([
+  "作曲：Alice",
+  "Words, Music & Arrangement: Bob",
+  "作詞・作曲・編曲: Bob",
+])(
+  "never derives voice quality from optional-array-independent bare credit %s",
+  async (creditQuote) => {
+    const { supportedAnalysis } = await import("../src/research/providers");
+    const source = {
+      id: "s0",
+      url,
+      title: "Blue Song",
+      content: `Blue Song official\nDescription\n${creditQuote}`,
+    };
+    const r = {
+      ...model.recordings[0],
+      credits: [],
+      tags: [
+        {
+          tag_id: "tag-38",
+          source_id: "s0",
+          quote: creditQuote,
+          reasoning:
+            "This credited creator establishes a transparent vocal quality for the recording.",
+        },
+      ],
+    };
+    const a = supportedAnalysis(
+      JSON.stringify({ recordings: [r] }),
+      [source],
+      { title: "Blue Song", reference_url: url },
+      [{ id: "tag-38", name: "透明感", category: "歌声の印象" }],
+    );
+    expect(a.recordings[0].tags).toHaveLength(0);
+    expect(a.review_warnings).toHaveLength(1);
+  },
+);
+
+it("retains an independently supported alias beside an unsupported sibling alias", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const r = structuredClone(model.recordings[0]);
+  r.tags = [];
+  r.credits[0].aliases.push({
+    name: "Invented Alice",
+    quote: "Alice aka Invented Alice",
+  });
+  const a = supportedAnalysis(
+    JSON.stringify({ recordings: [r] }),
+    [{ id: "s0", url, title: "Blue Song", content: evidence }],
+    { title: "Blue Song", reference_url: url },
+    [],
+  );
+  expect(a.recordings[0].credits[0].aliases).toEqual([
+    { name: "アリス", quote: "Alice / アリス" },
+  ]);
+  expect(a.review_warnings).toHaveLength(1);
+});
+
+it.each([0, 1])(
+  "investigates descriptors missing from captured native metadata/lyrics/resource source %s",
+  async (index) => {
+    const fixtures = JSON.parse(
+      await readFile(
+        "worker/tests/research-actual-model-fixtures.json",
+        "utf8",
+      ),
+    );
+    const fixture = fixtures[index];
+    const { hasDescriptors } = await import("../src/research/providers");
+    expect(hasDescriptors(fixture.sources, fixture.query.reference_url)).toBe(
+      false,
+    );
+    await answer(fixture.query.title, fixture.query.reference_url);
+    const job = (await allRows(db, "research_jobs"))[0];
+    await db
+      .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+      .bind(
+        JSON.stringify({ ...job, stage: "infer", evidence: fixture.sources }),
+        job.id,
+      )
+      .run();
+    let searches = 0;
+    const f = (async (i: any, init: any) => {
+      if (String(i).endsWith("/search")) {
+        searches++;
+        return json({ results: [] });
+      }
+      if (String(i).includes("api.groq.com"))
+        return json({ choices: [{ message: { content: fixture.raw } }] });
+      return provider(i, init);
+    }) as typeof fetch;
+    await measuredLiveDrain(f, 38);
+    expect(searches).toBe(1);
+    expect(
+      (await allRows(db, "research_results"))[0].review_warnings,
+    ).toContain("NO_SUPPORTED_TAG_DESCRIPTIONS");
+    expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
+  },
+);
+
+it.each([
+  "That’s why I dance, sleep, and forget everything",
+  "Instrumental (Piapro): https://piapro.example/download",
+])("does not treat %s as a recording description", async (text) => {
+  const { hasDescriptors } = await import("../src/research/providers");
+  expect(
+    hasDescriptors(
+      [
+        {
+          id: "s0",
+          url,
+          title: "Blue Song",
+          content: `Blue Song\nDescription\n${text}`,
+        },
+      ],
+      url,
+    ),
+  ).toBe(false);
+});
+
+it("aligns fresh and migrated classical tag definition while preserving its ID/name", async () => {
+  let classical = (await allRows(db, "tags")).find((t) => t.id === "tag-11")!;
+  expect(classical.name).toBe("クラシック");
+  expect(classical.criterion).not.toContain("バラード");
+  expect(classical.criterion).toContain("クラシック");
+  const old = `Webの説明・公式情報で「${classical.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
+  await db
+    .prepare("UPDATE tags SET data=? WHERE id=?")
+    .bind(JSON.stringify({ ...classical, criterion: old }), classical.id)
+    .run();
+  await db.exec(
+    (await readFile("worker/schema/0004_tag_criteria.sql", "utf8"))
+      .replace(/--[^\n]*\n/g, "")
+      .split("\n")
+      .filter((l) => l.trim())
+      .join("\n"),
+  );
+  const migrated = (await allRows(db, "tags")).find((t) => t.id === "tag-11")!;
+  expect(migrated.criterion).toBe(classical.criterion);
+});

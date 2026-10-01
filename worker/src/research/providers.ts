@@ -152,25 +152,40 @@ export function explicitCredit(
 }
 export const recordingTitleMatches = (actual: string, requested: string) =>
   norm(actual).includes(norm(requested));
+const fieldHeader =
+  /^\s*(?:channel|uploader|uploaded by|title|song title|チャンネル|投稿者|タイトル|曲名)(?:\s*[:：]|\s*$)/i;
+const descriptionHeader =
+  /^\s*(?:description|song credits|credits|説明|概要|楽曲クレジット|クレジット)(?:\s*[:：]|\s*$)/i;
 /** The metadata JSON prefix is a distinct field origin, never recording-credit prose. */
 function independentText(source: Evidence, role?: CreditRole) {
   const fields = source.metadata ? JSON.stringify(source.metadata) + "\n" : "";
   const text = source.content.startsWith(fields)
     ? source.content.slice(fields.length)
     : "";
+  let field: "channel" | "title" | null = null;
+  let pendingValue = false;
   return text
     .split(/\r?\n/)
     .filter((line) => {
-      if (norm(line) === norm(source.metadata?.title ?? source.title))
-        return false;
-      if (/^\s*(?:title|song title|タイトル|曲名)\s*[:：]/i.test(line))
-        return false;
-      return (
-        role === "uploader" ||
-        !/^\s*(?:channel|uploader|uploaded by|チャンネル|投稿者)\s*[:：]/i.test(
+      // The first nonempty value of a multiline field stays in that field,
+      // even when the value itself looks like a role or section label.
+      if (pendingValue) {
+        if (line.trim()) pendingValue = false;
+        return field === "channel" && role === "uploader";
+      }
+      if (descriptionHeader.test(line)) field = null;
+      else if (fieldHeader.test(line)) {
+        field = /^\s*(?:title|song title|タイトル|曲名)(?:\s*[:：]|\s*$)/i.test(
           line,
         )
-      );
+          ? "title"
+          : "channel";
+        pendingValue = /[:：]\s*$/.test(line) || !/[:：]/.test(line);
+      }
+      if (field && !(field === "channel" && role === "uploader")) return false;
+      if (norm(line) === norm(source.metadata?.title ?? source.title))
+        return false;
+      return true;
     })
     .join("\n");
 }
@@ -392,12 +407,7 @@ export function validateAnalysis(
       const tag = tags.find((x) => x.id === t.tag_id);
       if (!tag) fail();
       const tagSource = quote(t.source_id, t.quote, url!);
-      if (
-        tagSource.metadata &&
-        norm(JSON.stringify(tagSource.metadata)).includes(norm(t.quote)) &&
-        !norm(independentText(tagSource)).includes(norm(t.quote))
-      )
-        fail();
+      if (!norm(independentText(tagSource)).includes(norm(t.quote))) fail();
       if (
         !tag!.category?.startsWith("歌声") &&
         r.credits.some((c: Claim) => norm(c.quote) === norm(t.quote))
@@ -540,7 +550,11 @@ export function recordingWindows(raw: string) {
   const selected = new Set<number>();
   // Small context windows preserve a credit whose value is on the following line.
   for (let i = 0; i < usable.length; i++)
-    if (useful.test(usable[i])) {
+    if (
+      useful.test(usable[i]) ||
+      fieldHeader.test(usable[i]) ||
+      descriptionHeader.test(usable[i])
+    ) {
       selected.add(i);
       if (/[:：]\s*$/.test(usable[i]) && i + 1 < usable.length)
         selected.add(i + 1);

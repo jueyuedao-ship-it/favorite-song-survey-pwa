@@ -2065,3 +2065,192 @@ it("keeps explicit featured-title vocalist evidence without promoting arbitrary 
     (await allRows(db, "credits")).some((c) => c.role === "composer"),
   ).toBe(false);
 });
+const multilineAuthors = [
+  { author: "Music: Bob", name: "Bob", role: "composer" },
+  { author: "Vocal: Alice", name: "Alice", role: "vocalist" },
+];
+it.each(multilineAuthors)(
+  "rejects $role-looking values of multiline channel headers",
+  async (c) => {
+    const song = { ...liveSongs[0], author: c.author },
+      canonical = `https://www.youtube.com/watch?v=${song.id}`;
+    await answer(song.title, canonical);
+    await measuredLiveDrain(
+      liveFixture(song, {
+        raw: `Blue Song\nChannel:\n${c.author}\nDescription`,
+        analysis: {
+          recordings: [
+            {
+              title: song.native,
+              reference_url: canonical,
+              kind: "original",
+              source_id: "s0",
+              quote: song.title,
+              credits: [
+                {
+                  name: c.name,
+                  kind: "person",
+                  role: c.role,
+                  source_id: "s0",
+                  quote: c.author,
+                  aliases: [],
+                },
+              ],
+              tags: [],
+            },
+          ],
+        },
+      }),
+    );
+    expect(await allRows(db, "credits")).toHaveLength(0);
+    expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+    expect((await allRows(db, "research_jobs"))[0].status).toBe("needs_review");
+  },
+);
+it.each(multilineAuthors)(
+  "accepts $role credit truly in Description after multiline channel header",
+  async (c) => {
+    const song = { ...liveSongs[0], author: c.author },
+      canonical = `https://www.youtube.com/watch?v=${song.id}`;
+    await answer(song.title, canonical);
+    await measuredLiveDrain(
+      liveFixture(song, {
+        raw: `Channel:\n${c.author}\nDescription\n${c.author}`,
+        analysis: {
+          recordings: [
+            {
+              title: song.native,
+              reference_url: canonical,
+              kind: "original",
+              source_id: "s0",
+              quote: song.title,
+              credits: [
+                {
+                  name: c.name,
+                  kind: "person",
+                  role: c.role,
+                  source_id: "s0",
+                  quote: c.author,
+                  aliases: [],
+                },
+              ],
+              tags: [],
+            },
+          ],
+        },
+      }),
+    );
+    expect((await allRows(db, "credits"))[0]).toMatchObject({
+      role: c.role,
+      confirmed: true,
+    });
+    expect((await allRows(db, "entities"))[0].name).toBe(c.name);
+  },
+);
+it.each(multilineAuthors)(
+  "keeps the whole actual channel $author as uploader only",
+  async (c) => {
+    const song = { ...liveSongs[0], author: c.author },
+      canonical = `https://www.youtube.com/watch?v=${song.id}`;
+    await answer(song.title, canonical);
+    await measuredLiveDrain(
+      liveFixture(song, {
+        raw: `Channel:\n${c.author}\nDescription`,
+        analysis: {
+          recordings: [
+            {
+              title: song.native,
+              reference_url: canonical,
+              kind: "original",
+              source_id: "s0",
+              quote: song.title,
+              credits: [
+                {
+                  name: c.author,
+                  kind: "channel",
+                  role: "uploader",
+                  source_id: "s0",
+                  quote: c.author,
+                  aliases: [],
+                },
+              ],
+              tags: [],
+            },
+          ],
+        },
+      }),
+    );
+    const credits = await allRows(db, "credits");
+    expect(credits).toHaveLength(1);
+    expect(credits[0]).toMatchObject({ role: "uploader", confirmed: true });
+    expect((await allRows(db, "entities"))[0]).toMatchObject({
+      name: c.author,
+      kind: "channel",
+    });
+  },
+);
+it("does not derive voice tags from a multiline channel value", async () => {
+  const song = { ...liveSongs[0], author: "Vocal: Alice" },
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  await measuredLiveDrain(
+    liveFixture(song, {
+      raw: "Channel:\nVocal: Alice\nDescription",
+      analysis: {
+        recordings: [
+          {
+            title: song.native,
+            reference_url: canonical,
+            kind: "original",
+            source_id: "s0",
+            quote: song.title,
+            credits: [],
+            tags: [
+              {
+                tag_id: "tag-33",
+                source_id: "s0",
+                quote: "Vocal: Alice",
+                reasoning:
+                  "Vocal: Aliceという歌唱者を記した引用から、人の歌声の基準を満たすと判断した。",
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+  expect(await allRows(db, "tag_assignments")).toHaveLength(0);
+});
+it("preserves Japanese header/value context through extraction windows", async () => {
+  const song = { ...liveSongs[0], author: "Music: Bob" },
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  await measuredLiveDrain(
+    liveFixture(song, {
+      raw: "チャンネル:\nMusic: Bob\n概要",
+      analysis: {
+        recordings: [
+          {
+            title: song.native,
+            reference_url: canonical,
+            kind: "original",
+            source_id: "s0",
+            quote: song.title,
+            credits: [
+              {
+                name: "Bob",
+                kind: "person",
+                role: "composer",
+                source_id: "s0",
+                quote: "Music: Bob",
+                aliases: [],
+              },
+            ],
+            tags: [],
+          },
+        ],
+      },
+    }),
+  );
+  expect(await allRows(db, "credits")).toHaveLength(0);
+});

@@ -89,6 +89,14 @@ export interface Source extends Row {
   excerpt: string;
   checked_at: string;
   origin: "admin" | "research";
+  metadata?: RecordingMetadata;
+}
+/** Original public fields from a fixed trusted recording metadata endpoint. */
+export interface RecordingMetadata {
+  provider: "youtube_oembed";
+  endpoint: string;
+  title: string;
+  author_name: string;
 }
 export interface ResearchResult extends Row {
   version_id: string;
@@ -103,6 +111,7 @@ export interface ResearchEvidence {
   url: string;
   title: string;
   content: string;
+  metadata?: RecordingMetadata;
 }
 export interface ResearchClaim {
   name: string;

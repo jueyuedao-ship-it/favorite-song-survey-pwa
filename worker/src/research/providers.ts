@@ -1,10 +1,15 @@
-import type { CreditRole, VersionKind } from "../../../shared/contracts";
+import type {
+  CreditRole,
+  VersionKind,
+  RecordingMetadata,
+} from "../../../shared/contracts";
 import { catalogUrl } from "../catalog";
 export interface Evidence {
   id: string;
   url: string;
   title: string;
   content: string;
+  metadata?: RecordingMetadata;
 }
 export interface Claim {
   name: string;
@@ -135,7 +140,7 @@ export function explicitCredit(
     // Only a known following role marker permits a terminal sentence separator.
     // Interior punctuation and spaces remain part of the complete credited value.
     const bounded = markers[i + 1] ? value.replace(/\.\s*$/, "").trim() : value;
-    return complete(bounded);
+    return complete(value) || complete(bounded);
   });
 }
 export function requestTokenEstimate(body: unknown) {
@@ -248,13 +253,10 @@ export function validateAnalysis(
       fail();
     return s!;
   };
-  if (
-    !value ||
-    !Array.isArray(value.recordings) ||
-    value.recordings.length < 1 ||
-    value.recordings.length > 2
-  )
+  if (!value || !Array.isArray(value.recordings) || value.recordings.length > 2)
     fail();
+  if (!value.recordings.length)
+    throw new ResearchError("NO_SUPPORTED_RECORDINGS");
   const seen = new Set<string>();
   for (const r of value.recordings) {
     if (
@@ -283,6 +285,7 @@ export function validateAnalysis(
       !norm(s.content).includes(norm(r.title)) ||
       !norm(s.content).includes(norm(query.title)) ||
       !norm(r.title).includes(norm(query.title)) ||
+      (s.metadata && !norm(s.metadata.title).includes(norm(query.title))) ||
       (query.reference_url && catalogUrl(query.reference_url) !== url!)
     )
       fail();
@@ -312,8 +315,21 @@ export function validateAnalysis(
         c.aliases.length > 2
       )
         fail();
-      quote(c.source_id, c.quote, url!);
-      if (!explicitCredit(c.quote, c.name, c.role, c.aliases)) fail();
+      const creditedSource = quote(c.source_id, c.quote, url!);
+      const m = creditedSource.metadata;
+      const structuredUploader =
+        m?.provider === "youtube_oembed" &&
+        m.endpoint === youtubeMetadataEndpoint(url!) &&
+        c.role === "uploader" &&
+        c.kind === "channel" &&
+        c.name === m.author_name &&
+        c.quote === m.author_name &&
+        c.aliases.length === 0;
+      if (
+        !structuredUploader &&
+        !explicitCredit(c.quote, c.name, c.role, c.aliases)
+      )
+        fail();
       for (const a of c.aliases) {
         if (
           typeof a.name !== "string" ||
@@ -332,7 +348,12 @@ export function validateAnalysis(
     for (const t of r.tags) {
       const tag = tags.find((x) => x.id === t.tag_id);
       if (!tag) fail();
-      quote(t.source_id, t.quote, url!);
+      const tagSource = quote(t.source_id, t.quote, url!);
+      if (
+        tagSource.metadata &&
+        norm(JSON.stringify(tagSource.metadata)).includes(norm(t.quote))
+      )
+        fail();
       if (
         !tag!.category?.startsWith("歌声") &&
         r.credits.some((c: Claim) => norm(c.quote) === norm(t.quote))
@@ -361,6 +382,7 @@ export async function providerJson(
   url: string,
   key: string,
   body?: unknown,
+  timeoutMs = 20000,
 ): Promise<any> {
   const serialized = body ? JSON.stringify(body) : undefined;
   if (url.startsWith("https://api.groq.com/") && serialized) {
@@ -373,12 +395,12 @@ export async function providerJson(
     response = await fetcher(url, {
       method: body ? "POST" : "GET",
       headers: {
-        Authorization: `Bearer ${key}`,
+        ...(key ? { Authorization: `Bearer ${key}` } : {}),
         "Content-Type": "application/json",
         "User-Agent": "FavoriteSongSurvey/1.0",
       },
       ...(body ? { body: serialized } : {}),
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(timeoutMs),
       redirect: "error",
     });
   } catch {
@@ -425,4 +447,60 @@ export async function providerJson(
   } catch {
     throw new ResearchError("INVALID_PROVIDER_JSON");
   }
+}
+
+/** This is the only direct recording fetch: fixed HTTPS host, validated video ID. */
+export function youtubeMetadataEndpoint(url: string) {
+  if (!/^https:\/\/www\.youtube\.com\/watch\?v=[A-Za-z0-9_-]{11}$/.test(url))
+    return null;
+  return `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+}
+export async function recordingMetadata(
+  fetcher: typeof fetch,
+  url: string,
+): Promise<RecordingMetadata | undefined> {
+  const endpoint = youtubeMetadataEndpoint(url);
+  if (!endpoint) return;
+  try {
+    const m = await providerJson(fetcher, endpoint, "", undefined, 5000);
+    if (
+      typeof m.title !== "string" ||
+      !m.title.trim() ||
+      m.title.length > 256 ||
+      typeof m.author_name !== "string" ||
+      !m.author_name.trim() ||
+      m.author_name.length > 100
+    )
+      return;
+    return {
+      provider: "youtube_oembed",
+      endpoint,
+      title: m.title,
+      author_name: m.author_name,
+    };
+  } catch {
+    /* Missing metadata is recoverable; extracted evidence still applies. */
+  }
+}
+/** Retain verbatim useful windows, never requested names or invented credit labels. */
+export function recordingWindows(raw: string) {
+  const lines = raw.slice(0, 48000).split(/\r?\n/);
+  const footer = lines.findIndex((line) =>
+    /^\s*(?:Transcript|文字起こし|Members?\s*[:：]?|メンバー\s*[:：]?)\s*$/i.test(
+      line,
+    ),
+  );
+  const usable = footer < 0 ? lines : lines.slice(0, footer);
+  const useful =
+    /vocal|feat\.?|composer|composed|music|lyrics\s*[&/]|artist|upload|channel|released|official|genre|mood|description|\b(?:pop|rock|dance|jazz|folk|ballad|electronic|hip.hop|metal|bright|dark|warm|gentle|calm|upbeat|melancholic|refreshing|energetic|soft|powerful|tempo|chorus|instrumental)\b|作曲|歌唱|ボーカル|名義|投稿|配信|ジャンル|ポップ|ロック|ダンス|切な|爽やか|穏やか|透明感|https:\/\//i;
+  const selected = new Set<number>();
+  // Small context windows preserve a credit whose value is on the following line.
+  for (let i = 0; i < usable.length; i++)
+    if (useful.test(usable[i])) {
+      selected.add(i);
+      if (/[:：]\s*$/.test(usable[i]) && i + 1 < usable.length)
+        selected.add(i + 1);
+    }
+  const windows = [...selected].map((i) => usable[i]).join("\n");
+  return (windows || usable.slice(0, 6).join("\n")).slice(0, 1000);
 }

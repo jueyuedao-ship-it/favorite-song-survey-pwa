@@ -849,7 +849,7 @@ it("atomically rejects a credit whose source belongs to another recording", asyn
   ).rejects.toMatchObject({ status: 409 });
   expect((await allRows(db, "credits")).some((x) => x.id === c.id)).toBe(false);
 });
-import { validateAnalysis } from "../src/research/providers";
+import { validateAnalysis, explicitCredit } from "../src/research/providers";
 it("recognizes explicit featured vocalist attribution in official recording titles", () => {
   expect(() =>
     validateAnalysis(
@@ -1190,4 +1190,537 @@ it("preserves explicitly stated same-script alias evidence", () => {
       [],
     ),
   ).not.toThrow();
+});
+
+// External transport alone is faked; all leases, audited writes and stages use D1.
+const liveSongs = [
+  {
+    title: "スピカ",
+    id: "Ol1o3dgPIbI",
+    native: "ロクデナシ「スピカ」/ Rokudenashi - Spica【Official Music Video】",
+    author: "ロクデナシ",
+  },
+  {
+    title: "Overdose",
+    id: "H08YWE4CIFQ",
+    native: "なとり - Overdose",
+    author: "なとり / natori",
+  },
+  {
+    title: "風のたより",
+    id: "sWff60PZytQ",
+    native: "tayori - 風のたより (Official Video)",
+    author: "tayori",
+  },
+  {
+    title: "テレパシ",
+    id: "c56TpxfO9q0",
+    native: "DECO*27 - テレパシ feat. 初音ミク",
+    author: "DECO*27",
+  },
+];
+function liveFixture(
+  song: (typeof liveSongs)[number],
+  options: {
+    search?: any[];
+    raw?: string;
+    metadataStatus?: number;
+    analysis?: any;
+  } = {},
+) {
+  const canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  return (async (i: any, init: any) => {
+    const target = String(i);
+    if (target.startsWith("https://www.youtube.com/oembed?")) {
+      expect(new URL(target).searchParams.get("url")).toBe(canonical);
+      expect(new Headers(init.headers).has("Authorization")).toBe(false);
+      expect(init.redirect).toBe("error");
+      return json(
+        {
+          title: song.native,
+          author_name: song.author,
+          author_url: "https://www.youtube.com/@fixture",
+          type: "video",
+          version: "1.0",
+          provider_name: "YouTube",
+          provider_url: "https://www.youtube.com/",
+          html: "<iframe></iframe>",
+          width: 200,
+          height: 113,
+          thumbnail_url: "https://i.ytimg.com/vi/fixture/hqdefault.jpg",
+          thumbnail_width: 480,
+          thumbnail_height: 360,
+        },
+        options.metadataStatus ?? 200,
+      );
+    }
+    if (target.endsWith("/search"))
+      return json({
+        results: options.search ?? [
+          {
+            url,
+            title: song.title,
+            content: `${song.title} unrelated recording`,
+          },
+        ],
+      });
+    if (target.endsWith("/extract")) {
+      const b = JSON.parse(init.body);
+      return json({
+        results: b.urls.map((u: string) => ({
+          url: u,
+          raw_content:
+            u === canonical
+              ? (options.raw ?? "Transcript\n[0:01] music\nlyrics only")
+              : `${song.title} unrelated recording`,
+        })),
+      });
+    }
+    if (target.includes("api.groq.com"))
+      return json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify(
+                options.analysis ?? {
+                  recordings: [
+                    {
+                      title: song.native,
+                      reference_url: canonical,
+                      kind: "original",
+                      source_id: "s0",
+                      quote: song.title,
+                      credits: [
+                        {
+                          name: song.author,
+                          kind: "channel",
+                          role: "uploader",
+                          source_id: "s0",
+                          quote: song.author,
+                          aliases: [],
+                        },
+                      ],
+                      tags: [],
+                    },
+                  ],
+                },
+              ),
+            },
+          },
+        ],
+      });
+    return provider(i, init);
+  }) as typeof fetch;
+}
+async function measuredLiveDrain(f: typeof fetch, n = 25) {
+  for (let i = 0; i < n; i++) {
+    let queries = 0;
+    const measured = new Proxy(db, {
+      get(t, key) {
+        if (key === "prepare")
+          return (sql: string) => {
+            const wrap = (s: D1PreparedStatement): D1PreparedStatement =>
+              new Proxy(s, {
+                get(t, k) {
+                  if (k === "bind")
+                    return (...v: unknown[]) => wrap(t.bind(...v));
+                  const fn = Reflect.get(t, k);
+                  if (["first", "all", "run", "raw"].includes(String(k)))
+                    return (...v: unknown[]) => {
+                      queries++;
+                      return fn.apply(t, v);
+                    };
+                  return typeof fn === "function" ? fn.bind(t) : fn;
+                },
+              });
+            return wrap(t.prepare(sql));
+          };
+        if (key === "batch")
+          return (s: D1PreparedStatement[]) => {
+            queries += s.length;
+            return t.batch(s);
+          };
+        const value = Reflect.get(t, key);
+        return typeof value === "function" ? value.bind(t) : value;
+      },
+    });
+    await run({ ...env(), DB: measured }, undefined, f);
+    expect(queries).toBeLessThanOrEqual(50);
+  }
+}
+it.each(liveSongs)(
+  "investigates supplied $title despite unrelated/localized ranking and stores exact metadata uploader",
+  async (song) => {
+    const canonical = `https://www.youtube.com/watch?v=${song.id}`;
+    const r = await answer(song.title, canonical);
+    const f = liveFixture(song, {
+      search: [
+        {
+          url,
+          title: song.title === "スピカ" ? "Rokudenashi - Spica" : song.title,
+          content: "unrelated version",
+        },
+      ],
+    });
+    await measuredLiveDrain(f);
+    const saved = (await allRows(db, "responses")).find((x) => x.id === r.id)!;
+    expect(saved.version_id).toBeTruthy();
+    const versions = await allRows(db, "versions");
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({
+      reference_url: canonical,
+      title: song.native,
+    });
+    const credits = await allRows(db, "credits");
+    expect(credits).toHaveLength(1);
+    expect(credits[0]).toMatchObject({ role: "uploader", confirmed: true });
+    expect((await allRows(db, "entities"))[0]).toMatchObject({
+      name: song.author,
+      kind: "channel",
+    });
+    const source = (await allRows(db, "sources")).find(
+      (s) => s.id === credits[0].source_id,
+    )!;
+    expect(source).toMatchObject({
+      url: canonical,
+      version_id: saved.version_id,
+    });
+    expect(source.excerpt).toContain(song.native);
+    expect(source.excerpt).toContain(song.author);
+    expect(source.metadata).toMatchObject({
+      provider: "youtube_oembed",
+      title: song.native,
+      author_name: song.author,
+    });
+    expect(source.metadata?.endpoint).toBe(
+      `https://www.youtube.com/oembed?url=${encodeURIComponent(canonical)}&format=json`,
+    );
+  },
+);
+it("preserves late song-credit windows and exact retrieved header when lyrics dominate extraction", async () => {
+  const song = liveSongs[2],
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  const raw = `Description\n${"歌詞の行です\n".repeat(180)}Vocal: isui\nMusic: raku\nbright and refreshing pop dance tune\nTranscript\n[0:01] ${"music ".repeat(100)}`;
+  const f = liveFixture(song, {
+    raw,
+    analysis: {
+      recordings: [
+        {
+          title: song.native,
+          reference_url: canonical,
+          kind: "original",
+          source_id: "s0",
+          quote: song.title,
+          credits: [
+            {
+              name: "isui",
+              kind: "person",
+              role: "vocalist",
+              source_id: "s0",
+              quote: "Vocal: isui",
+              aliases: [],
+            },
+          ],
+          tags: [
+            {
+              tag_id: "tag-08",
+              source_id: "s0",
+              quote: "bright and refreshing pop dance tune",
+              reasoning:
+                "bright and refreshing pop dance tuneという説明はダンスポップのポップとダンスを融合する特徴を明示している。",
+            },
+          ],
+        },
+      ],
+    },
+  });
+  await measuredLiveDrain(f);
+  expect((await allRows(db, "credits"))[0]?.role).toBe("vocalist");
+  const tag = (await allRows(db, "tag_assignments"))[0];
+  expect(tag?.confirmed).toBe(true);
+  const source = (await allRows(db, "sources")).find(
+    (s) => s.id === tag.source_id,
+  )!;
+  expect(source.excerpt).toContain("Vocal: isui");
+  expect(source.excerpt).toContain(song.native);
+  expect(source.excerpt).not.toContain("[0:01]");
+});
+it("retains actual search title on extract fallback without public metadata", async () => {
+  const song = liveSongs[1],
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  const f = liveFixture(song, {
+    metadataStatus: 503,
+    search: [{ url: canonical, title: song.native, content: "Vocal: Alice" }],
+    raw: "Vocal: Alice",
+    analysis: {
+      recordings: [
+        {
+          title: song.native,
+          reference_url: canonical,
+          kind: "original",
+          source_id: "s0",
+          quote: "Overdose",
+          credits: [
+            {
+              name: "Alice",
+              kind: "person",
+              role: "vocalist",
+              source_id: "s0",
+              quote: "Vocal: Alice",
+              aliases: [],
+            },
+          ],
+          tags: [],
+        },
+      ],
+    },
+  });
+  await measuredLiveDrain(f);
+  expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
+  expect((await allRows(db, "sources"))[0].excerpt).toContain(song.native);
+});
+it("rejects supplied wrong recording title instead of attaching a ranked alternative", async () => {
+  const song = liveSongs[2],
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer("テレパシ", canonical);
+  await measuredLiveDrain(liveFixture(song));
+  expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+  expect(await allRows(db, "versions")).toHaveLength(0);
+  expect((await allRows(db, "research_jobs"))[0]).toMatchObject({
+    status: "needs_review",
+    last_error: "RECORDING_TITLE_CONFLICT",
+  });
+  expect(
+    (await allRows(db, "research_jobs"))[0].evidence?.[0].metadata?.title,
+  ).toBe(song.native);
+});
+it.each(["vocalist", "composer", "release_name"])(
+  "never promotes structured channel authors into %s",
+  async (role) => {
+    const song = liveSongs[3],
+      canonical = `https://www.youtube.com/watch?v=${song.id}`;
+    await answer(song.title, canonical);
+    await measuredLiveDrain(
+      liveFixture(song, {
+        analysis: {
+          recordings: [
+            {
+              title: song.native,
+              reference_url: canonical,
+              kind: "original",
+              source_id: "s0",
+              quote: song.title,
+              credits: [
+                {
+                  name: song.author,
+                  kind: "person",
+                  role,
+                  source_id: "s0",
+                  quote: song.author,
+                  aliases: [],
+                },
+              ],
+              tags: [],
+            },
+          ],
+        },
+      }),
+    );
+    expect(await allRows(db, "credits")).toHaveLength(0);
+    expect((await allRows(db, "research_jobs"))[0].status).toBe("needs_review");
+  },
+);
+it.each([false, true])(
+  "publishes terminal metadata review status while respecting manual lock=%s",
+  async (manual_lock) => {
+    const song = liveSongs[0],
+      canonical = `https://www.youtube.com/watch?v=${song.id}`;
+    const w = await insert(
+      "works",
+      newRow({ title: song.title, manual_lock: false }),
+    );
+    const v = await insert(
+      "versions",
+      newRow({
+        work_id: w.id,
+        title: song.title,
+        reference_url: canonical,
+        kind: "original",
+        uploader_entity_id: null,
+        research_status: "queued",
+        manual_lock,
+      }),
+    );
+    await insert("research_jobs", researchJob(v));
+    await measuredLiveDrain(
+      liveFixture(song, { analysis: { recordings: [] } }),
+    );
+    expect((await allRows(db, "research_jobs"))[0]).toMatchObject({
+      status: "needs_review",
+      last_error: "NO_SUPPORTED_RECORDINGS",
+    });
+    expect((await allRows(db, "versions"))[0].research_status).toBe(
+      manual_lock ? "queued" : "needs_review",
+    );
+    expect(await allRows(db, "credits")).toHaveLength(0);
+  },
+);
+it("preserves terminal-dot artist names before another role marker", () => {
+  expect(explicitCredit("Vocal: fun. Music: Bob", "fun.", "vocalist")).toBe(
+    true,
+  );
+  expect(explicitCredit("Vocal: fun. Music: Bob", "fun", "vocalist")).toBe(
+    true,
+  );
+});
+it("does not treat group-member footer credits as recording credits", async () => {
+  const song = liveSongs[2],
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  await measuredLiveDrain(
+    liveFixture(song, {
+      raw: "Lyrics\n歌詞の末尾\nMember\nVocal: isui\nMusic: raku\nTranscript\n[0:01] music",
+      analysis: {
+        recordings: [
+          {
+            title: song.native,
+            reference_url: canonical,
+            kind: "original",
+            source_id: "s0",
+            quote: song.title,
+            credits: [
+              {
+                name: "isui",
+                kind: "person",
+                role: "vocalist",
+                source_id: "s0",
+                quote: "Vocal: isui",
+                aliases: [],
+              },
+            ],
+            tags: [],
+          },
+        ],
+      },
+    }),
+  );
+  expect(await allRows(db, "credits")).toHaveLength(0);
+  expect((await allRows(db, "research_jobs"))[0].status).toBe("needs_review");
+});
+it("does not treat structured author fields as semantic genre evidence", async () => {
+  const song = liveSongs[0],
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title, canonical);
+  await measuredLiveDrain(
+    liveFixture(song, {
+      analysis: {
+        recordings: [
+          {
+            title: song.native,
+            reference_url: canonical,
+            kind: "original",
+            source_id: "s0",
+            quote: song.title,
+            credits: [],
+            tags: [
+              {
+                tag_id: "tag-08",
+                source_id: "s0",
+                quote: song.author,
+                reasoning:
+                  "ロクデナシという投稿者の名前は、ダンスポップの特徴と一致するためこのジャンルに分類する。",
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+  expect(await allRows(db, "tag_assignments")).toHaveLength(0);
+  expect((await allRows(db, "research_jobs"))[0].status).toBe("needs_review");
+});
+it("resolves ordinary title-only Japanese input through native metadata on a localized YouTube search result", async () => {
+  const song = liveSongs[0],
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  await answer(song.title);
+  await measuredLiveDrain(
+    liveFixture(song, {
+      search: [
+        {
+          url: canonical,
+          title: "Rokudenashi - Spica (Official Music Video)",
+          content: "Official music video by Rokudenashi",
+        },
+      ],
+    }),
+  );
+  const saved = (await allRows(db, "responses"))[0];
+  expect(saved.version_id).toBeTruthy();
+  expect((await allRows(db, "versions"))[0]).toMatchObject({
+    title: song.native,
+    reference_url: canonical,
+  });
+  expect((await allRows(db, "sources"))[0].metadata?.author_name).toBe(
+    song.author,
+  );
+});
+it("keeps only matching native title from capped multilingual candidates", async () => {
+  const song = liveSongs[0],
+    canonical = `https://www.youtube.com/watch?v=${song.id}`;
+  const wrong = "https://www.youtube.com/watch?v=zyxwvutsrqp";
+  const ignored = "https://www.youtube.com/watch?v=123456789ab";
+  await answer(song.title);
+  const fallback = liveFixture(song, {
+    search: [
+      { url: wrong, title: "Foreign song", content: "Official recording" },
+      { url: canonical, title: "Spica", content: "Official recording" },
+      { url: ignored, title: "Third song", content: "Official recording" },
+      {
+        url: "https://www.youtube.com/watch?v=abcdefghijk",
+        title: "Fourth song",
+        content: "Official recording",
+      },
+    ],
+    analysis: {
+      recordings: [
+        {
+          title: song.native,
+          reference_url: canonical,
+          kind: "original",
+          source_id: "s1",
+          quote: song.title,
+          credits: [
+            {
+              name: song.author,
+              kind: "channel",
+              role: "uploader",
+              source_id: "s1",
+              quote: song.author,
+              aliases: [],
+            },
+          ],
+          tags: [],
+        },
+      ],
+    },
+  });
+  const f = (async (i: any, b: any) => {
+    if (String(i).startsWith("https://www.youtube.com/oembed?")) {
+      const u = new URL(String(i)).searchParams.get("url");
+      if (u === wrong || u === ignored)
+        return json({
+          title: "unrelated song",
+          author_name: "unrelated channel",
+        });
+    }
+    return fallback(i, b);
+  }) as typeof fetch;
+  await measuredLiveDrain(f);
+  expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
+  expect((await allRows(db, "versions")).map((v) => v.reference_url)).toEqual([
+    canonical,
+  ]);
+  expect((await allRows(db, "sources")).map((s) => s.url)).toEqual([canonical]);
 });

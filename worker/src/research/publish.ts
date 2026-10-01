@@ -200,6 +200,7 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
             url: e.url,
             title: e.title,
             excerpt: e.content,
+            ...(e.metadata ? { metadata: e.metadata } : {}),
             checked_at: now(),
             origin: "research",
           }),

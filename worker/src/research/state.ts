@@ -97,6 +97,21 @@ export async function save(
   patch: Partial<ResearchJob>,
   changes: Change[] = [],
 ) {
+  if (
+    job.version_id &&
+    (patch.status === "needs_review" || patch.status === "failed") &&
+    !changes.some(
+      (c) => c.table === "versions" && c.after.id === job.version_id,
+    )
+  ) {
+    const version = await getRow(env.DB, "versions", job.version_id);
+    if (!version.manual_lock)
+      changes.push({
+        table: "versions",
+        before: version,
+        after: updated(version, { research_status: patch.status }),
+      });
+  }
   if (patch.last_error) {
     const usage = (
       await rows<Usage>(

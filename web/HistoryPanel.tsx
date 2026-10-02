@@ -152,9 +152,12 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
         : record.version_id
           ? unavailableVersionIds.has(record.version_id) && !loadingVersionIds.has(record.version_id) ? "曲情報を取得できませんでした" : "曲情報を読み込んでいます…"
           : "曲名未入力";
+      const displayTitle = song
+        ? identifiedTitle || record.unresolved_title || "曲情報を取得できませんでした"
+        : record.unresolved_title ?? identifiedTitle;
       return <article className="history-card" key={record.id}>
         <div className="history-date"><span>{record.record_date}</span><span className="music-mark" aria-hidden="true">♪</span></div>
-        <div className="history-song"><h3>{record.unresolved_title ?? identifiedTitle}</h3>
+        <div className="history-song"><h3>{displayTitle}</h3>
           {record.artist_hint && <p>{record.artist_hint}</p>}
           {creditSummary && <p>{creditSummary}</p>}
           {record.reference_url && <a href={record.reference_url} target="_blank" rel="noreferrer">参照ページを開く</a>}

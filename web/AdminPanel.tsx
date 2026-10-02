@@ -630,6 +630,20 @@ function AuditHistory({ api, token, onError, onNotice }: ChildProps) {
   </div>;
 }
 
+function needsReviewExplanation(job: AnyRow): string {
+  if (job.last_error === "RECORDING_TITLE_CONFLICT") {
+    return "検索結果の曲名が一致せず、登録前の確認が必要です。";
+  }
+  const analysis = auditSnapshot(job.analysis);
+  const publishedPartial = job.status === "needs_review"
+    && job.stage === "done"
+    && Array.isArray(analysis?.recordings)
+    && analysis.recordings.length > 0;
+  return publishedPartial
+    ? "一部の情報を登録しました。残りの項目は確認が必要です。"
+    : "登録状況を確定できないため、調査内容とカタログを確認してください。";
+}
+
 function OperationsStatus({ api, token, onError, onNotice }: ChildProps) {
   const [jobs, setJobs] = useState<AnyRow[]>([]);
   const [jobsNextCursor, setJobsNextCursor] = useState<string | null>(null);
@@ -718,7 +732,7 @@ function OperationsStatus({ api, token, onError, onNotice }: ChildProps) {
         return <article className="admin-row" key={job.id}><div>
           <strong>{String(job.query && typeof job.query === "object" ? (job.query as Record<string, unknown>).title ?? "曲情報" : "調査")}</strong>
           <p>{researchStatusLabels[String(job.status)] ?? String(job.status)} · 試行 {String(job.attempts ?? 0)} · {String(job.last_error ?? "エラーなし")}</p>
-          {needsReview && <><p>一部の情報を登録しました。残りの項目は確認が必要です。</p>{warnings.length > 0 && <details><summary>確認が必要な項目</summary><ul>{warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></details>}</>}
+          {needsReview && <><p>{needsReviewExplanation(job)}</p>{warnings.length > 0 && <details><summary>確認が必要な項目</summary><ul>{warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></details>}</>}
         </div>{["failed", "needs_review"].includes(String(job.status)) && <button type="button" className="secondary-button" onClick={() => void retryJob(job)}>再試行</button>}</article>;
       })}</div> : <p className="empty-state">待機中の調査はありません。</p>}
       {jobsNextCursor && <button type="button" className="secondary-button" onClick={() => void loadMoreJobs()}>調査をもっと読み込む</button>}

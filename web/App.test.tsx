@@ -604,8 +604,8 @@ describe("最終UI統合", () => {
     const calls = installApi((url) => {
       if (url.pathname.endsWith("/participants")) return result({ items: [alice], next_cursor: null });
       if (url.pathname.endsWith("/records")) return result({ items: [
-        { id: "r-1", revision: 1, participant_id: alice.id, version_id: "v-shared", unresolved_title: null, record_date: "2026-09-30" },
-        { id: "r-2", revision: 1, participant_id: alice.id, version_id: "v-shared", unresolved_title: null, record_date: "2026-09-29" },
+        { id: "r-1", revision: 1, participant_id: alice.id, version_id: "v-shared", unresolved_title: "粗い動画タイトル", record_date: "2026-09-30" },
+        { id: "r-2", revision: 1, participant_id: alice.id, version_id: "v-shared", unresolved_title: "昔の入力名", record_date: "2026-09-29" },
         { id: "r-3", revision: 1, participant_id: alice.id, version_id: null, unresolved_title: "昔の未特定曲", record_date: "2026-09-28" },
       ], next_cursor: null });
       if (url.pathname.endsWith("/catalog/versions/v-shared")) return result({
@@ -626,6 +626,8 @@ describe("最終UI統合", () => {
     await user.click(await screen.findByRole("button", { name: "自分の記録" }));
     expect(await screen.findAllByText("夏の記憶 · 弾き語り版")).toHaveLength(2);
     expect(await screen.findAllByText("ボーカル: 倚水 · 発表名義: isui")).toHaveLength(2);
+    expect(screen.queryByText("粗い動画タイトル")).not.toBeInTheDocument();
+    expect(screen.queryByText("昔の入力名")).not.toBeInTheDocument();
     expect(screen.getByText("昔の未特定曲")).toBeInTheDocument();
     await waitFor(() => expect(calls.filter(({ url }) => url.pathname.endsWith("/catalog/versions/v-shared"))).toHaveLength(1));
     expect(screen.queryByText("登録曲 · v-shared")).not.toBeInTheDocument();
@@ -675,10 +677,16 @@ describe("最終UI統合", () => {
       if (url.pathname.endsWith("/admin/login")) return result({ session_token: "memory-admin-token", expires_at: "2026-10-01T08:00:00Z" });
       if (url.pathname.endsWith("/admin/participants")) return result({ items: [], next_cursor: null });
       if (url.pathname.endsWith("/admin/invites")) return result({ items: [], next_cursor: null });
-      if (url.pathname.endsWith("/admin/jobs")) return result({ items: [{
-        id: "job-partial", revision: 2, query: { title: "部分確認曲" }, status: "needs_review", attempts: 1,
-        analysis: { recordings: [], review_warnings: ["CREDIT_ROLE_UNCONFIRMED"] }, raw_model: "private raw prediction",
-      }], next_cursor: null });
+      if (url.pathname.endsWith("/admin/jobs")) return result({ items: [
+        {
+          id: "job-partial", revision: 2, query: { title: "部分確認曲" }, status: "needs_review", stage: "done", attempts: 1,
+          analysis: { recordings: [{ title: "部分確認曲", kind: "cover", reference_url: "https://example.test/song", source_id: "source-1", quote: "曲名の根拠", credits: [], tags: [] }], review_warnings: ["CREDIT_ROLE_UNCONFIRMED"] }, raw_model: "private raw prediction",
+        },
+        {
+          id: "job-conflict", revision: 1, query: { title: "曲名不一致" }, status: "needs_review", stage: "search", attempts: 1,
+          last_error: "RECORDING_TITLE_CONFLICT", analysis: { recordings: [], review_warnings: [] },
+        },
+      ], next_cursor: null });
       if (url.pathname.endsWith("/admin/usage")) return result({ month: "2026-10", tavily_credits: 0, tavily_credit_cap: 800, groq_requests: 0, configured: {} });
       if (url.pathname.endsWith("/admin/sync-status")) return result({ items: [], high_watermark: 0 });
       if (url.pathname.endsWith("/health")) return result({ configured: { admin: true } });
@@ -698,7 +706,8 @@ describe("最終UI統合", () => {
     await user.click(screen.getByRole("button", { name: "ログイン" }));
     await user.click(await screen.findByRole("button", { name: "管理画面" }));
     await user.click(await screen.findByRole("button", { name: "運用状況" }));
-    expect(await screen.findByText("一部の情報を登録しました。残りの項目は確認が必要です。")).toBeInTheDocument();
+    expect(await screen.findAllByText("一部の情報を登録しました。残りの項目は確認が必要です。")).toHaveLength(1);
+    expect(await screen.findByText("検索結果の曲名が一致せず、登録前の確認が必要です。")).toBeInTheDocument();
     await user.click(screen.getByText("確認が必要な項目"));
     expect(await screen.findByText("CREDIT_ROLE_UNCONFIRMED")).toBeInTheDocument();
     expect(screen.queryByText("private raw prediction")).not.toBeInTheDocument();

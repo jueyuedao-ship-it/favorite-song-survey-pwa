@@ -1254,7 +1254,7 @@ function liveFixture(
     if (target.startsWith("https://www.youtube.com/oembed?")) {
       expect(new URL(target).searchParams.get("url")).toBe(canonical);
       expect(new Headers(init.headers).has("Authorization")).toBe(false);
-      expect(init.redirect).toBe("error");
+      expect(init.redirect).toBe("manual");
       return json(
         {
           title: song.native,

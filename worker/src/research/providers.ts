@@ -717,10 +717,16 @@ export async function providerJson(
       },
       ...(body ? { body: serialized } : {}),
       signal: AbortSignal.timeout(timeoutMs),
-      redirect: "error",
+      redirect: "manual",
     });
   } catch {
     throw new ResearchError("PROVIDER_UNAVAILABLE", true);
+  }
+  // Workers supports manual/follow only. Reject every redirect here so provider
+  // credentials never reach a Location target and redirect bodies cannot be evidence.
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel();
+    throw new ResearchError(`PROVIDER_HTTP_${response.status}`);
   }
   if (!response.ok) {
     const retry = response.headers.get("retry-after") ?? "60";

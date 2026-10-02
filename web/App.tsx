@@ -4,6 +4,7 @@ import { AdminPanel } from "./AdminPanel";
 import { AnswerPanel } from "./AnswerPanel";
 import { createApi, ApiError } from "./api";
 import { clearInviteHash, inviteLink, inviteSecretFromHash } from "./links";
+import { formatJapaneseDateTime } from "./dates";
 import { HistoryPanel } from "./HistoryPanel";
 import { InviteShare } from "./InviteShare";
 import { StatisticsPanel } from "./StatisticsPanel";
@@ -296,7 +297,7 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
       const session = await api.post<{ session_token: string; expires_at: string }>("/admin/login", { password: adminPassword });
       setAdminToken(session.session_token);
       setAdminPassword("");
-      setNotice(`管理者としてログインしました。セッション期限 ${session.expires_at}。`);
+      setNotice(`管理者としてログインしました。セッション期限 ${formatJapaneseDateTime(session.expires_at)}。`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "管理者ログインに失敗しました。"); }
   }
 
@@ -359,6 +360,6 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
       </section>)}
 
     {inviteShareLink && <div className="modal-backdrop"><InviteShare title="別の端末を追加" link={inviteShareLink} onClose={() => setInviteShareLink("")} /></div>}
-    <footer className="app-footer"><span>記録日は日本時間で集計されます。</span><span>本人確認と表示名は別に保存します。</span></footer>
+    <footer className="app-footer"><span>記録日は日本時間で集計されます。</span></footer>
   </main>;
 }

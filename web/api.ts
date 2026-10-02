@@ -71,11 +71,13 @@ export function createApi(apiBase: string, options: ApiOptions = {}) {
       });
     } catch (error) {
       if (cache) {
-        const cached = await cache.match(url);
+        let cached: Response | undefined;
+        try { cached = await cache.match(url); }
+        catch { cached = undefined; }
         if (cached) response = cached;
-        else throw error;
+        else throw new Error("サーバーに接続できませんでした。接続を確認して、もう一度お試しください。", { cause: error });
       } else {
-        throw error;
+        throw new Error("サーバーに接続できませんでした。接続を確認して、もう一度お試しください。", { cause: error });
       }
     }
 

@@ -6,6 +6,7 @@ import { inviteLink } from "./links";
 import { createSecret, newOperationId } from "./storage";
 import { InviteShare } from "./InviteShare";
 import { loadAllPages } from "./pagination";
+import { formatJapaneseDateTime } from "./dates";
 
 type SurveyApi = ReturnType<typeof createApi>;
 type AnyRow = Record<string, unknown> & { id: string; revision: number; deleted_at?: string | null };
@@ -32,6 +33,29 @@ const tableLabels: Record<EditableTable, string> = {
   tags: "タグ",
   tag_assignments: "タグの付与",
   sources: "情報源",
+};
+
+const auditTableLabels: Record<string, string> = {
+  ...tableLabels,
+  responses: "回答",
+  research_results: "調査結果",
+  research_jobs: "調査ジョブ",
+  usage: "利用状況",
+  devices: "端末",
+  invites: "招待",
+  audit: "変更履歴",
+  audit_corrections: "履歴訂正",
+  sync_status: "PC同期",
+};
+
+const auditActionLabels: Record<string, string> = { create: "作成", update: "更新", delete: "削除" };
+const researchStatusLabels: Record<string, string> = {
+  unconfirmed: "未確認",
+  queued: "待機中",
+  running: "処理中",
+  complete: "情報確認済み",
+  failed: "失敗",
+  needs_review: "要確認",
 };
 
 type Field = { key: string; label: string; type?: "text" | "textarea" | "select" | "checkbox" | "number"; options?: { value: string; label: string }[]; reference?: EditableTable; required?: boolean; nullable?: boolean };
@@ -92,9 +116,10 @@ function onlineGuard(): void {
   if (!navigator.onLine) throw new Error("管理者操作にはインターネット接続が必要です。接続後にもう一度お試しください。");
 }
 
-function loadAdminTable<T>(api: SurveyApi, table: BusinessTable, token: string, limit = 200): Promise<T[]> {
+function loadAdminTable<T>(api: SurveyApi, table: BusinessTable, token: string, limit = 200, includeDeleted = false): Promise<T[]> {
   return loadAllPages((cursor) => {
     const params = new URLSearchParams({ limit: String(limit) });
+    if (includeDeleted) params.set("include_deleted", "true");
     if (cursor) params.set("cursor", cursor);
     return api.get<Page<T>>(`/admin/data/${table}?${params}`, { token });
   });
@@ -232,13 +257,13 @@ function ParticipantsAdmin({ api, token, onError, onNotice }: ChildProps) {
     {shareLink && <InviteShare title="参加者の招待" link={shareLink} onClose={() => setShareLink("")} />}
     {activeParticipant && <section className="subsection"><h3>{participants.find((person) => person.id === activeParticipant)?.name ?? "参加者"}の端末</h3>
       {devices.length ? <div className="admin-row-list">{devices.map((device) => <article className="admin-row" key={device.id}>
-        <div><h4>{String(device.label ?? "端末")}</h4><p className="muted-note">{device.revoked_at ? "取り消し済み" : "利用中"} · {String(device.updated_at ?? device.created_at ?? "")}</p></div>
+        <div><h4>{String(device.label ?? "端末")}</h4><p className="muted-note">{device.revoked_at ? "取り消し済み" : "利用中"} · {formatJapaneseDateTime(String(device.updated_at ?? device.created_at ?? ""))}</p></div>
         {!device.revoked_at && <button className="danger-button" type="button" onClick={() => void revokeDevice(device)}>この端末を取り消す</button>}
       </article>)}</div> : <p className="empty-state">この参加者の端末はありません。</p>}
       {devicesNextCursor && <button className="secondary-button" type="button" onClick={() => void showDevices(activeParticipant, devicesNextCursor, true)}>端末をもっと読み込む</button>}
     </section>}
     <section className="subsection"><h3>招待の状態</h3>
-      {invites.length ? <div className="table-scroll"><table><thead><tr><th>参加者</th><th>期限</th><th>使用状態</th><th>操作</th></tr></thead><tbody>{invites.map((invite) => <tr key={invite.id}><td>{participants.find((person) => person.id === invite.participant_id)?.name ?? "参加者"}</td><td>{String(invite.expires_at)}</td><td>{invite.deleted_at ? "取り消し済み" : invite.claimed_at ? "使用済み" : String(invite.expires_at) < new Date().toISOString() ? "期限切れ" : "未使用"}</td><td>{!invite.deleted_at && !invite.claimed_at && String(invite.expires_at) > new Date().toISOString() && <button type="button" className="danger-button" onClick={() => void revokeInvite(invite)}>この招待を取り消す</button>}</td></tr>)}</tbody></table></div> : <p className="empty-state">招待履歴はありません。</p>}
+      {invites.length ? <div className="table-scroll"><table><thead><tr><th>参加者</th><th>期限</th><th>使用状態</th><th>操作</th></tr></thead><tbody>{invites.map((invite) => <tr key={invite.id}><td>{participants.find((person) => person.id === invite.participant_id)?.name ?? `参加者（${String(invite.participant_id ?? "ID不明")}）`}</td><td>{formatJapaneseDateTime(String(invite.expires_at ?? ""))}</td><td>{invite.deleted_at ? "取り消し済み" : invite.claimed_at ? "使用済み" : String(invite.expires_at) < new Date().toISOString() ? "期限切れ" : "未使用"}</td><td>{!invite.deleted_at && !invite.claimed_at && String(invite.expires_at) > new Date().toISOString() && <button type="button" className="danger-button" onClick={() => void revokeInvite(invite)}>この招待を取り消す</button>}</td></tr>)}</tbody></table></div> : <p className="empty-state">招待履歴はありません。</p>}
       {invitesNextCursor && <button className="secondary-button" type="button" onClick={() => void loadInvites(invitesNextCursor, true)}>招待をもっと読み込む</button>}
     </section>
   </div>;
@@ -475,8 +500,68 @@ function AdminRecords({ api, token, onError, onNotice }: ChildProps) {
   </div>;
 }
 
+type AuditReferences = { participants: Participant[]; devices: AnyRow[]; versions: AnyRow[]; works: AnyRow[] };
+
+function auditSnapshot(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function auditSnapshots(audit: AnyRow): Record<string, unknown>[] {
+  return [audit.effective, audit.after, audit.before].map(auditSnapshot).filter((value): value is Record<string, unknown> => Boolean(value));
+}
+
+function auditSnapshotText(audit: AnyRow, key: string): string | undefined {
+  const value = auditSnapshots(audit).map((snapshot) => snapshot[key]).find((item) => item !== undefined && item !== null && String(item).trim());
+  return value === undefined ? undefined : String(value);
+}
+
+function auditSnapshotName(audit: AnyRow, key: string): string | undefined {
+  const names = [...new Set([auditSnapshot(audit.before)?.[key], auditSnapshot(audit.after)?.[key], auditSnapshot(audit.effective)?.[key]]
+    .filter((name): name is string => typeof name === "string" && Boolean(name.trim())))];
+  return names.length > 1 ? `${names[0]} → ${names[names.length - 1]}` : names[0];
+}
+
+function auditSummary(audit: AnyRow, references: AuditReferences) {
+  const table = String(audit.table ?? "unknown");
+  const tableLabel = auditTableLabels[table] ?? "データ";
+  const action = auditActionLabels[String(audit.action)] ?? String(audit.action ?? "変更");
+  const rowId = String(audit.row_id ?? "");
+  const versionId = auditSnapshotText(audit, "version_id") ?? (table === "versions" ? rowId : undefined);
+  const version = references.versions.find((item) => item.id === versionId);
+  const workId = auditSnapshotText(audit, "work_id") ?? String(version?.work_id ?? (table === "works" ? rowId : ""));
+  const work = references.works.find((item) => item.id === workId);
+  const workTitle = String(table === "works" ? auditSnapshotName(audit, "title") ?? work?.title ?? "" : work?.title ?? "");
+  const versionTitle = String(table === "versions" ? auditSnapshotName(audit, "title") ?? version?.title ?? "" : version?.title ?? "");
+  const songTitle = [workTitle, versionTitle].filter(Boolean).join(" · ") || auditSnapshotText(audit, "unresolved_title");
+
+  let target = songTitle;
+  if (table === "participants") {
+    target = auditSnapshotName(audit, "name") ?? references.participants.find((person) => person.id === rowId)?.name;
+  }
+  target ??= auditSnapshotText(audit, "title") ?? auditSnapshotText(audit, "name") ?? auditSnapshotText(audit, "label");
+  target ||= tableLabel;
+
+  const snapshotParticipantId = auditSnapshotText(audit, "participant_id");
+  const participantId = String(audit.participant_id ?? "");
+  const actorId = String(audit.actor_id ?? "");
+  const deviceParticipantId = String(references.devices.find((device) => device.id === actorId)?.participant_id ?? "");
+  const actorParticipantId = participantId || deviceParticipantId || snapshotParticipantId || actorId;
+  const actorName = audit.actor_type === "admin"
+    ? "管理者"
+    : audit.actor_type === "system"
+      ? "自動処理"
+      : references.participants.find((person) => person.id === actorParticipantId)?.name ?? (actorParticipantId ? `参加者（${actorParticipantId}）` : "参加者");
+
+  return {
+    heading: `${target} · ${action}（${tableLabel}）`,
+    actor: actorName,
+    occurredAt: formatJapaneseDateTime(String(audit.created_at ?? "")),
+  };
+}
+
 function AuditHistory({ api, token, onError, onNotice }: ChildProps) {
   const [audits, setAudits] = useState<AnyRow[]>([]);
+  const [references, setReferences] = useState<AuditReferences>({ participants: [], devices: [], versions: [], works: [] });
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState<AnyRow | null>(null);
   const [reason, setReason] = useState("");
@@ -494,6 +579,20 @@ function AuditHistory({ api, token, onError, onNotice }: ChildProps) {
     } catch (error) { onError(error instanceof Error ? error.message : "変更履歴を読み込めませんでした。"); }
   }, [api, filterTable, onError, token]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    let live = true;
+    void Promise.all([
+      loadAdminTable<Participant>(api, "participants", token, 200, true),
+      loadAdminTable<AnyRow>(api, "devices", token, 200, true),
+      loadAdminTable<AnyRow>(api, "versions", token, 200, true),
+      loadAdminTable<AnyRow>(api, "works", token, 200, true),
+    ]).then(([participants, devices, versions, works]) => {
+      if (live) setReferences({ participants, devices, versions, works });
+    }).catch((reason: unknown) => {
+      if (live) onError(reason instanceof Error ? reason.message : "変更履歴の参照先を読み込めませんでした。");
+    });
+    return () => { live = false; };
+  }, [api, onError, token]);
 
   async function correct(event: FormEvent) {
     event.preventDefault();
@@ -514,16 +613,19 @@ function AuditHistory({ api, token, onError, onNotice }: ChildProps) {
   return <div className="admin-section">
     <header className="list-toolbar"><label>データ表で絞り込み<input value={filterTable} onChange={(event) => setFilterTable(event.target.value)} placeholder="例: responses" /></label><button type="button" className="secondary-button" onClick={() => void load()}>絞り込み</button></header>
     <p className="muted-note">元の変更と訂正は別々に保存されます。画面に表示する有効値はAPIのeffective内容です。</p>
-    {selected && <form className="editor-form" onSubmit={correct}><h3>履歴を訂正 · {String(selected.table)} / {String(selected.row_id)}</h3>
+    {selected && <form className="editor-form" onSubmit={correct}><h3>履歴を訂正 · {auditSummary(selected, references).heading}</h3>
       <label>訂正理由<textarea aria-label="訂正理由" required value={reason} onChange={(event) => setReason(event.target.value)} /></label>
       <label>訂正後のJSON<textarea aria-label="訂正後のJSON" required value={corrected} onChange={(event) => setCorrected(event.target.value)} rows={6} /></label>
       <div className="button-row"><button type="submit" className="primary-button">履歴を訂正</button><button type="button" className="quiet-button" onClick={() => setSelected(null)}>キャンセル</button></div>
     </form>}
-    {audits.length ? <div className="admin-row-list">{audits.map((audit) => <article className="admin-row audit-row" key={audit.id}>
-      <div><h4>{String(audit.table)} · {String(audit.action)} · {String(audit.row_id)}</h4><p>{String(audit.actor_type)} / {String(audit.actor_id ?? "")} · {String(audit.created_at ?? "")}</p>
-        <details><summary>変更前後と有効値</summary><pre>{JSON.stringify({ before: audit.before, after: audit.after, effective: audit.effective ?? audit.after }, null, 2)}</pre></details>
+    {audits.length ? <div className="admin-row-list">{audits.map((audit) => {
+      const summary = auditSummary(audit, references);
+      return <article className="admin-row audit-row" key={audit.id}>
+      <div><h4>{summary.heading}</h4><p>{summary.actor} · {summary.occurredAt}</p>
+        <details><summary>元データ・変更前後（ID含む）</summary><pre>{JSON.stringify(audit, null, 2)}</pre></details>
       </div><button type="button" className="secondary-button" onClick={() => { setSelected(audit); setReason(""); setCorrected(JSON.stringify(audit.effective ?? audit.after ?? {}, null, 2)); }}>この履歴を訂正</button>
-    </article>)}</div> : <p className="empty-state">変更履歴はありません。</p>}
+    </article>;
+    })}</div> : <p className="empty-state">変更履歴はありません。</p>}
     {nextCursor && <button type="button" className="secondary-button" onClick={() => void load(nextCursor, true)}>履歴をもっと読み込む</button>}
   </div>;
 }
@@ -597,6 +699,12 @@ function OperationsStatus({ api, token, onError, onNotice }: ChildProps) {
     } catch (reason) { onError(reason instanceof Error ? reason.message : "再試行できませんでした。"); }
   }
 
+  function warningCodes(job: AnyRow): string[] {
+    const analysis = auditSnapshot(job.analysis);
+    const warnings = Array.isArray(analysis?.review_warnings) ? analysis.review_warnings : Array.isArray(job.review_warnings) ? job.review_warnings : [];
+    return warnings.filter((warning): warning is string => typeof warning === "string").slice(0, 8).map((warning) => warning.slice(0, 80));
+  }
+
   return <div className="admin-section operations-grid">
     <div className="ops-card"><h3>調査の利用状況</h3>
       {usage ? <dl className="status-list">{Object.entries(usage).filter(([key]) => key !== "configured").map(([key, value]) => <div key={key}><dt>{({ month: "対象月", tavily_credits: "検索クレジット", tavily_credit_cap: "月間上限", groq_requests: "AI依頼数", last_error: "直近のエラー" } as Record<string, string>)[key] ?? key}</dt><dd>{String(value ?? "なし")}</dd></div>)}</dl> : <p>利用状況はまだありません。</p>}
@@ -604,7 +712,15 @@ function OperationsStatus({ api, token, onError, onNotice }: ChildProps) {
       {Boolean(health?.configured) && <ul className="configured-list">{Object.entries(health?.configured as Record<string, boolean>).map(([key, value]) => <li key={key}><span>{({ admin: "管理者", sync: "PC同期", groq: "AI解析", tavily: "Web検索", research_runner: "調査実行" } as Record<string, string>)[key] ?? key}</span><strong>{value ? "設定済み" : "未設定"}</strong></li>)}</ul>}
     </div>
     <div className="ops-card"><h3>調査ジョブ</h3>
-      {jobs.length ? <div className="admin-row-list compact-list">{jobs.map((job) => <article className="admin-row" key={job.id}><div><strong>{String(job.query && typeof job.query === "object" ? (job.query as Record<string, unknown>).title ?? "曲情報" : "調査")}</strong><p>{String(job.status)} · 試行 {String(job.attempts ?? 0)} · {String(job.last_error ?? "エラーなし")}</p></div>{["failed", "needs_review"].includes(String(job.status)) && <button type="button" className="secondary-button" onClick={() => void retryJob(job)}>再試行</button>}</article>)}</div> : <p className="empty-state">待機中の調査はありません。</p>}
+      {jobs.length ? <div className="admin-row-list compact-list">{jobs.map((job) => {
+        const needsReview = job.status === "needs_review";
+        const warnings = warningCodes(job);
+        return <article className="admin-row" key={job.id}><div>
+          <strong>{String(job.query && typeof job.query === "object" ? (job.query as Record<string, unknown>).title ?? "曲情報" : "調査")}</strong>
+          <p>{researchStatusLabels[String(job.status)] ?? String(job.status)} · 試行 {String(job.attempts ?? 0)} · {String(job.last_error ?? "エラーなし")}</p>
+          {needsReview && <><p>一部の情報を登録しました。残りの項目は確認が必要です。</p>{warnings.length > 0 && <details><summary>確認が必要な項目</summary><ul>{warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></details>}</>}
+        </div>{["failed", "needs_review"].includes(String(job.status)) && <button type="button" className="secondary-button" onClick={() => void retryJob(job)}>再試行</button>}</article>;
+      })}</div> : <p className="empty-state">待機中の調査はありません。</p>}
       {jobsNextCursor && <button type="button" className="secondary-button" onClick={() => void loadMoreJobs()}>調査をもっと読み込む</button>}
     </div>
     <div className="ops-card"><h3>PCへの同期</h3>

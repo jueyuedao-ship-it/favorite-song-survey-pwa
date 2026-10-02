@@ -506,6 +506,7 @@ describe("管理と統計", () => {
     await screen.findByRole("heading", { name: "葵" });
     await user.click(await screen.findByRole("button", { name: "招待をもっと読み込む" }));
     await waitFor(() => expect(calls.some(({ url }) => url.pathname.endsWith("/admin/invites") && url.searchParams.get("cursor") === "invite-1")).toBe(true));
+    expect(await screen.findByText("参加者（p-later）")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "端末を見る" }));
     await screen.findByText("一台目");
@@ -594,4 +595,120 @@ it('管理者は招待を取り消せる', async () => {
    return result({items:[],next_cursor:null});
  });
  const user=userEvent.setup();renderApp();await user.click(await screen.findByRole('button',{name:'管理者ログイン'}));await user.type(screen.getByLabelText('管理者パスワード'),'secret');await user.click(screen.getByRole('button',{name:'ログイン'}));await user.click(await screen.findByRole('button',{name:'管理画面'}));await user.click(await screen.findByRole('button',{name:'この招待を取り消す'}));await screen.findByText('取り消し済み');const call=calls.find(c=>c.url.pathname.endsWith('/admin/invites/cancel-invite'));expect(call?.init.method).toBe('DELETE');expect(JSON.parse(String(call?.init.body))).toMatchObject({expected_revision:1});
+});
+
+describe("最終UI統合", () => {
+  it("履歴はカタログ名とボーカル・発表名義を示し、同じ版の詳細を一度だけ取得する", async () => {
+    const alice = await seedIdentity("p-alice", "葵", "alice-device-secret");
+    await saveSelectedParticipant(API_BASE, alice.id);
+    const calls = installApi((url) => {
+      if (url.pathname.endsWith("/participants")) return result({ items: [alice], next_cursor: null });
+      if (url.pathname.endsWith("/records")) return result({ items: [
+        { id: "r-1", revision: 1, participant_id: alice.id, version_id: "v-shared", unresolved_title: null, record_date: "2026-09-30" },
+        { id: "r-2", revision: 1, participant_id: alice.id, version_id: "v-shared", unresolved_title: null, record_date: "2026-09-29" },
+        { id: "r-3", revision: 1, participant_id: alice.id, version_id: null, unresolved_title: "昔の未特定曲", record_date: "2026-09-28" },
+      ], next_cursor: null });
+      if (url.pathname.endsWith("/catalog/versions/v-shared")) return result({
+        version: version("v-shared", "弾き語り版"),
+        work: { id: "work-shared", title: "夏の記憶" },
+        credits: [
+          { id: "credit-vocal", role: "vocalist", entity: { id: "entity-vocal", name: "倚水" } },
+          { id: "credit-release", role: "release_name", entity: { id: "entity-release", name: "isui" } },
+        ],
+        tags: [],
+        sources: [],
+      });
+      return result({ items: [], next_cursor: null });
+    });
+
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(await screen.findByRole("button", { name: "自分の記録" }));
+    expect(await screen.findAllByText("夏の記憶 · 弾き語り版")).toHaveLength(2);
+    expect(await screen.findAllByText("ボーカル: 倚水 · 発表名義: isui")).toHaveLength(2);
+    expect(screen.getByText("昔の未特定曲")).toBeInTheDocument();
+    await waitFor(() => expect(calls.filter(({ url }) => url.pathname.endsWith("/catalog/versions/v-shared"))).toHaveLength(1));
+    expect(screen.queryByText("登録曲 · v-shared")).not.toBeInTheDocument();
+  });
+
+  it("削除済み回答の監査要約は参加者・曲・操作と日本時間を示す", async () => {
+    const alice = participant("p-alice", "葵");
+    const audit = {
+      id: "audit-response-delete", revision: 1, table: "responses", row_id: "r-deleted", action: "delete",
+      actor_type: "guest", actor_id: "device-alice", participant_id: null,
+      created_at: "2026-10-01T23:30:00.000Z",
+      before: { id: "r-deleted", participant_id: alice.id, version_id: "v-night", record_date: "2026-10-01", deleted_at: null },
+      after: { id: "r-deleted", participant_id: alice.id, version_id: "v-night", record_date: "2026-10-01", deleted_at: "2026-10-01T23:30:00.000Z" },
+    };
+    const calls = installApi((url) => {
+      if (url.pathname === new URL(API_BASE).pathname + "/participants") return result({ items: [], next_cursor: null });
+      if (url.pathname.endsWith("/admin/login")) return result({ session_token: "memory-admin-token", expires_at: "2026-10-01T23:30:00.000Z" });
+      if (url.pathname.endsWith("/admin/participants")) return result({ items: [alice], next_cursor: null });
+      if (url.pathname.endsWith("/admin/invites")) return result({ items: [], next_cursor: null });
+      if (url.pathname.endsWith("/admin/data/participants")) return result({ items: [alice], next_cursor: null });
+      if (url.pathname.endsWith("/admin/data/devices")) return result({ items: [{ id: "device-alice", participant_id: alice.id, label: "葵の端末" }], next_cursor: null });
+      if (url.pathname.endsWith("/admin/data/versions")) return result({ items: [{ id: "v-night", work_id: "work-night", title: "夜明け (cover)" }], next_cursor: null });
+      if (url.pathname.endsWith("/admin/data/works")) return result({ items: [{ id: "work-night", title: "夜明け" }], next_cursor: null });
+      if (url.pathname.endsWith("/admin/audit")) return result({ items: [audit], next_cursor: null });
+      return result({ items: [], next_cursor: null });
+    });
+
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(await screen.findByRole("button", { name: "管理者ログイン" }));
+    await user.type(screen.getByLabelText("管理者パスワード"), "secret");
+    await user.click(await screen.findByRole("button", { name: "ログイン" }));
+    expect(await screen.findByText("管理者としてログインしました。セッション期限 2026年10月2日 08:30。")).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "管理画面" }));
+    await user.click(await screen.findByRole("button", { name: "変更履歴" }));
+
+    expect(await screen.findByText("夜明け · 夜明け (cover) · 削除（回答）")).toBeInTheDocument();
+    expect(await screen.findByText("葵 · 2026年10月2日 08:30")).toBeInTheDocument();
+    expect(calls.some(({ url }) => url.pathname.endsWith("/admin/data/devices"))).toBe(true);
+    expect(calls.some(({ url }) => url.pathname.endsWith("/admin/data/versions"))).toBe(true);
+  });
+
+  it("候補と管理ジョブは部分登録を要確認として伝え、予測本文は表示しない", async () => {
+    installApi((url) => {
+      if (url.pathname.endsWith("/participants")) return result({ items: [], next_cursor: null });
+      if (url.pathname.endsWith("/catalog/search")) return result({ items: [{ ...version("v-partial", "仮登録版"), research_status: "needs_review" }], next_cursor: null });
+      if (url.pathname.endsWith("/admin/login")) return result({ session_token: "memory-admin-token", expires_at: "2026-10-01T08:00:00Z" });
+      if (url.pathname.endsWith("/admin/participants")) return result({ items: [], next_cursor: null });
+      if (url.pathname.endsWith("/admin/invites")) return result({ items: [], next_cursor: null });
+      if (url.pathname.endsWith("/admin/jobs")) return result({ items: [{
+        id: "job-partial", revision: 2, query: { title: "部分確認曲" }, status: "needs_review", attempts: 1,
+        analysis: { recordings: [], review_warnings: ["CREDIT_ROLE_UNCONFIRMED"] }, raw_model: "private raw prediction",
+      }], next_cursor: null });
+      if (url.pathname.endsWith("/admin/usage")) return result({ month: "2026-10", tavily_credits: 0, tavily_credit_cap: 800, groq_requests: 0, configured: {} });
+      if (url.pathname.endsWith("/admin/sync-status")) return result({ items: [], high_watermark: 0 });
+      if (url.pathname.endsWith("/health")) return result({ configured: { admin: true } });
+      if (url.pathname.endsWith("/admin/data/usage")) return result({ items: [], next_cursor: null });
+      return result({ items: [], next_cursor: null });
+    });
+
+    const user = userEvent.setup();
+    renderApp();
+    await user.type(await screen.findByLabelText("曲名"), "部分確認曲");
+    await user.click(screen.getByRole("button", { name: "曲を検索" }));
+    expect(await screen.findByText("要確認")).toBeInTheDocument();
+    expect(screen.queryByText("情報確認中")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "管理者ログイン" }));
+    await user.type(screen.getByLabelText("管理者パスワード"), "secret");
+    await user.click(screen.getByRole("button", { name: "ログイン" }));
+    await user.click(await screen.findByRole("button", { name: "管理画面" }));
+    await user.click(await screen.findByRole("button", { name: "運用状況" }));
+    expect(await screen.findByText("一部の情報を登録しました。残りの項目は確認が必要です。")).toBeInTheDocument();
+    await user.click(screen.getByText("確認が必要な項目"));
+    expect(await screen.findByText("CREDIT_ROLE_UNCONFIRMED")).toBeInTheDocument();
+    expect(screen.queryByText("private raw prediction")).not.toBeInTheDocument();
+  });
+
+  it("起動時に通信と公開キャッシュが使えない場合も生メッセージを出さない", async () => {
+    installApi(() => { throw new TypeError("Failed to fetch"); });
+    vi.stubGlobal("caches", { open: async () => ({ match: async () => undefined, put: async () => undefined }) } as unknown as CacheStorage);
+    renderApp();
+    expect(await screen.findByRole("alert")).toHaveTextContent("サーバーに接続できませんでした。接続を確認して、もう一度お試しください。");
+    expect(screen.queryByText("Failed to fetch")).not.toBeInTheDocument();
+  });
 });

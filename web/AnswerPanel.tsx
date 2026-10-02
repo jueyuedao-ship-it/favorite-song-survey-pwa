@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { CatalogCandidate, Participant, RecordCreate } from "../shared/contracts";
+import type { CatalogCandidate, Participant, RecordCreate, ResearchStatus } from "../shared/contracts";
 import { todayInJapan } from "./dates";
 import type { PendingRegistration, StoredCredential } from "./storage";
 import type { createApi } from "./api";
@@ -20,6 +20,17 @@ type Props = {
 
 function kindName(kind: string): string {
   return ({ original: "原曲", cover: "カバー", remix: "リミックス", other: "その他" } as Record<string, string>)[kind] ?? kind;
+}
+
+function researchStatusName(status: ResearchStatus): string {
+  return ({
+    unconfirmed: "未確認",
+    queued: "情報確認中",
+    running: "情報確認中",
+    complete: "情報確認済み",
+    failed: "調査に失敗しました",
+    needs_review: "要確認",
+  } as Record<ResearchStatus, string>)[status];
 }
 
 export function AnswerPanel({ api, selectedParticipant, credential, pendingCount, online, pendingRegistration, onCreateGuest, onRetryRegistration, onSubmit, onAddDevice }: Props) {
@@ -132,7 +143,7 @@ export function AnswerPanel({ api, selectedParticipant, credential, pendingCount
               <span className="candidate-title">{candidate.work_title}</span>
               <span className="candidate-version">{candidate.title} · {kindName(candidate.kind)}</span>
               <span className="candidate-credits">{creditNames.length ? creditNames.join("・") : "確認済みクレジットなし"}</span>
-              <span className="candidate-status">{candidate.research_status === "complete" ? "情報確認済み" : "情報確認中"}</span>
+              <span className="candidate-status">{researchStatusName(candidate.research_status)}</span>
             </button>;
           })}
         </div>}

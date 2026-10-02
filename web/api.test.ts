@@ -57,12 +57,12 @@ describe("APIと公開スナップショット", () => {
     expect(caches.cache.entries.size).toBe(0);
   });
 
-  it("UI unit test mode rejects an uninjected fetch instead of reaching a live listener", async () => {
+  it("UI unit test mode rejects an uninjected fetch in Japanese instead of reaching a live listener", async () => {
     const liveNetwork = vi.fn().mockResolvedValue(ok({ configured: true }));
     vi.stubGlobal("fetch", liveNetwork);
     try {
       const api = createApi("http://127.0.0.1:8791/api/v1");
-      await expect(api.get("/health")).rejects.toThrow("UI unit tests must inject fetch");
+      await expect(api.get("/health")).rejects.toThrow("サーバーに接続できませんでした。接続を確認して、もう一度お試しください。");
       expect(liveNetwork).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import type { CatalogCandidate, Page, Participant, RecordCandidates, RecordUpdate, SurveyRecord } from "../shared/contracts";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { CatalogCandidate, Page, Participant, RecordCandidates, RecordUpdate, SongDetail, SurveyRecord } from "../shared/contracts";
 import { createApi } from "./api";
 import { todayInJapan } from "./dates";
 import { newOperationId } from "./storage";
@@ -20,6 +20,10 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
   const [candidates, setCandidates] = useState<CatalogCandidate[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<string>("");
   const [candidateStatus, setCandidateStatus] = useState("");
+  const [songDetails, setSongDetails] = useState<Record<string, SongDetail>>({});
+  const [loadingVersionIds, setLoadingVersionIds] = useState<Set<string>>(new Set());
+  const [unavailableVersionIds, setUnavailableVersionIds] = useState<Set<string>>(new Set());
+  const requestedVersionIds = useRef(new Set<string>());
 
   const load = useCallback(async (cursor?: string | null, append = false) => {
     if (!participant) { setRecords([]); return; }
@@ -36,6 +40,25 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
   }, [api, participant]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    const missing = [...new Set(records.flatMap((record) => record.version_id ? [record.version_id] : []))]
+      .filter((versionId) => !requestedVersionIds.current.has(versionId));
+    if (!missing.length) return;
+    for (const versionId of missing) requestedVersionIds.current.add(versionId);
+    setLoadingVersionIds((current) => new Set([...current, ...missing]));
+    void Promise.all(missing.map(async (versionId) => {
+      try {
+        return [versionId, await api.get<SongDetail>(`/catalog/versions/${encodeURIComponent(versionId)}`)] as const;
+      } catch {
+        return [versionId, undefined] as const;
+      }
+    })).then((entries) => {
+      setSongDetails((current) => ({ ...current, ...Object.fromEntries(entries.filter((entry): entry is readonly [string, SongDetail] => Boolean(entry[1]))) }));
+      setUnavailableVersionIds((current) => new Set([...current, ...entries.filter((entry) => !entry[1]).map(([id]) => id)]));
+      setLoadingVersionIds((current) => new Set([...current].filter((id) => !missing.includes(id))));
+    });
+  }, [api, records]);
 
   function startEdit(record: SurveyRecord) {
     setEditing(record);
@@ -117,10 +140,23 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
     {loading && <p role="status">履歴を読み込んでいます…</p>}
     {records.length ? <div className="history-list">{records.map((record) => {
       const own = Boolean(credential && credential.participant_id === participant.id && credential.participant_id === record.participant_id);
+      const song = record.version_id ? songDetails[record.version_id] : undefined;
+      const vocalistNames = song ? [...new Set(song.credits.filter((credit) => credit.role === "vocalist").map((credit) => credit.entity.name))] : [];
+      const releaseNames = song ? [...new Set(song.credits.filter((credit) => credit.role === "release_name").map((credit) => credit.entity.name))] : [];
+      const creditSummary = [
+        vocalistNames.length ? `ボーカル: ${vocalistNames.join("・")}` : "",
+        releaseNames.length ? `発表名義: ${releaseNames.join("・")}` : "",
+      ].filter(Boolean).join(" · ");
+      const identifiedTitle = song
+        ? [...new Set([song.work.title, song.version.title].filter(Boolean))].join(" · ")
+        : record.version_id
+          ? unavailableVersionIds.has(record.version_id) && !loadingVersionIds.has(record.version_id) ? "曲情報を取得できませんでした" : "曲情報を読み込んでいます…"
+          : "曲名未入力";
       return <article className="history-card" key={record.id}>
         <div className="history-date"><span>{record.record_date}</span><span className="music-mark" aria-hidden="true">♪</span></div>
-        <div className="history-song"><h3>{record.unresolved_title ?? (record.version_id ? `登録曲 · ${record.version_id.slice(0, 8)}` : "曲名未入力")}</h3>
+        <div className="history-song"><h3>{record.unresolved_title ?? identifiedTitle}</h3>
           {record.artist_hint && <p>{record.artist_hint}</p>}
+          {creditSummary && <p>{creditSummary}</p>}
           {record.reference_url && <a href={record.reference_url} target="_blank" rel="noreferrer">参照ページを開く</a>}
           {record.version_id && <span className="version-pill">曲が特定済み</span>}
         </div>

@@ -143,10 +143,10 @@ export function explicitCredit(
   aliases: { name: string; quote: string }[] = [],
 ) {
   if (!norm(name)) return false;
-  const complete = (value: string) => {
+  const complete = (value: string, named: boolean) => {
     const attributed = norm(value);
     const credited = norm(name);
-    if (attributed === credited) return true;
+    if (attributed === credited) return named;
     // A punctuation-bearing credited name is one complete value. Slash/comma/&
     // never establish separate people. Explicit whole-value alias forms may match.
     return aliases.some((a) => {
@@ -181,12 +181,14 @@ export function explicitCredit(
   };
   return creditClauses(quote).some(
     ({ role: attributedRole, value, bounded, named }) => {
-      if (!named || attributedRole !== role) return false;
+      if (attributedRole !== role) return false;
+      // Structural alias tokens may fail the plain-name gate. Only the exact
+      // whole-value alias proof below can establish those whitespace fields.
       return (
-        complete(value) ||
-        complete(bounded) ||
-        complete(withoutHandles(value)) ||
-        complete(withoutHandles(bounded))
+        complete(value, named) ||
+        complete(bounded, named) ||
+        complete(withoutHandles(value), named) ||
+        complete(withoutHandles(bounded), named)
       );
     },
   );

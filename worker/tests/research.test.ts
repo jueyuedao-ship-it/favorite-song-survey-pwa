@@ -3047,6 +3047,46 @@ it("never promotes a descriptive predicate to a named vocalist", () => {
 });
 
 it.each([
+  {
+    quote: "Vocal Alice / アリス",
+    alternate: "アリス",
+    proof: "Alice / アリス",
+  },
+  {
+    quote: "Vocal: Alice / アリス",
+    alternate: "アリス",
+    proof: "Alice / アリス",
+  },
+  {
+    quote: "Vocal Alice (aka Alice Smith)",
+    alternate: "Alice Smith",
+    proof: "Alice (aka Alice Smith)",
+  },
+  {
+    quote: "Vocal: Alice (aka Alice Smith)",
+    alternate: "Alice Smith",
+    proof: "Alice (aka Alice Smith)",
+  },
+])("preserves evidenced whole-value alias credit $quote", (c) => {
+  expect(
+    explicitCredit(c.quote, "Alice", "vocalist", [
+      { name: c.alternate, quote: c.proof },
+    ]),
+  ).toBe(true);
+  expect(explicitCredit(c.quote, "Alice", "vocalist")).toBe(false);
+  expect(
+    explicitCredit(c.quote, "Alice", "vocalist", [
+      { name: c.alternate, quote: "unrelated alias evidence" },
+    ]),
+  ).toBe(false);
+  expect(
+    explicitCredit(c.quote, "Ali", "vocalist", [
+      { name: c.alternate, quote: c.proof },
+    ]),
+  ).toBe(false);
+});
+
+it.each([
   { role: "composer", name: "tazuneru", quote: "Music tazuneru" },
   { role: "vocalist", name: "AC/DC", quote: "Vocal AC/DC" },
   { role: "vocalist", name: "fun.", quote: "Vocal fun." },

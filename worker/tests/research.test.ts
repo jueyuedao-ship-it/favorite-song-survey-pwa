@@ -7,7 +7,11 @@ import {
 } from "../src/research/runner";
 import { newRow, allRows } from "../src/store";
 import { researchJob, safeUrl, candidates, songDetail } from "../src/catalog";
-import type { WorkerEnv, ResearchJob } from "../../shared/contracts";
+import type {
+  WorkerEnv,
+  ResearchJob,
+  CreditRole,
+} from "../../shared/contracts";
 import { registerRuntimeTransport } from "./miniflare-transport";
 let mf: Miniflare, db: D1Database;
 let closeTransport: () => Promise<void>;
@@ -2819,6 +2823,10 @@ it.each([
   "Words, Music & Arrangement: Bob",
   "作詞・作曲・編曲: Bob",
   "The music was composed by Alice.",
+  "Vocal. Alice",
+  "Vocal Alice",
+  "Music Nayutan Seijin",
+  "Vocal alice smith",
 ])(
   "never derives voice quality from optional-array-independent bare credit %s",
   async (creditQuote) => {
@@ -2959,6 +2967,8 @@ it("aligns fresh and migrated classical tag definition while preserving its ID/n
 it.each([
   { quote: "The music is bright refreshing dance pop.", tag: "tag-08" },
   { quote: "The vocals are clear and transparent.", tag: "tag-38" },
+  { quote: "Vocals deliver a clear and transparent tone.", tag: "tag-38" },
+  { quote: "Vocals deliver a clear and transparent tone", tag: "tag-38" },
 ])(
   "retains ordinary music/vocals descriptive prose $quote as evidence and confirmed tags",
   async (example) => {
@@ -3016,3 +3026,41 @@ it.each([
     );
   },
 );
+
+it.each([":", ".", "-", "–", "—", " "])(
+  "preserves complete named vocalist fields with shared separator %s",
+  (separator) => {
+    const quote = `Vocal${separator} Alice`;
+    expect(explicitCredit(quote, "Alice", "vocalist")).toBe(true);
+    expect(explicitCredit(quote, "Ali", "vocalist")).toBe(false);
+  },
+);
+
+it("never promotes a descriptive predicate to a named vocalist", () => {
+  expect(
+    explicitCredit(
+      "Vocals deliver a clear and transparent tone.",
+      "deliver a clear and transparent tone.",
+      "vocalist",
+    ),
+  ).toBe(false);
+});
+
+it.each([
+  { role: "composer", name: "tazuneru", quote: "Music tazuneru" },
+  { role: "vocalist", name: "AC/DC", quote: "Vocal AC/DC" },
+  { role: "vocalist", name: "fun.", quote: "Vocal fun." },
+  {
+    role: "release_name",
+    name: "Mrs. GREEN APPLE",
+    quote: "Artist Mrs. GREEN APPLE",
+  },
+  {
+    role: "composer",
+    name: "Nayutan Seijin",
+    quote: "Music Nayutan Seijin @officialnayutalien1318",
+  },
+  { role: "vocalist", name: "alice smith", quote: "Vocal: alice smith" },
+])("preserves shared complete named credit value $quote", (c) => {
+  expect(explicitCredit(c.quote, c.name, c.role as CreditRole)).toBe(true);
+});

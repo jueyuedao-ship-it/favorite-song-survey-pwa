@@ -76,26 +76,64 @@ const creditGroups: { role: CreditRole; pattern: string }[] = [
   },
 ];
 
-const creditRolePattern =
-  "(?:" + creditGroups.map((g) => g.pattern).join("|") + ")";
+const withoutHandles = (value: string) =>
+  value.replace(/(?:\s+@[a-z0-9_][a-z0-9_.-]*)+\s*$/i, "").trim();
+const descriptorWords =
+  /\b(?:pop|rock|dance|jazz|folk|ballad|electronic|hip.hop|metal|bright|dark|warm|gentle|calm|upbeat|melancholic|refreshing|energetic|soft|powerful|clear|transparent|tempo|chorus|instrumental)\b|ジャンル|曲調|ポップ|ロック|ダンス|切な|爽やか|穏やか|透明感|ハスキー|疾走感|バラード/i;
+/** Share field boundaries and complete values between credit and tag provenance. */
+function creditClauses(quote: string) {
+  // Preserve case: a multiword whitespace-only name needs proper-name tokens.
+  // Explicit fields/by/featured clauses also permit lowercase multiword names.
+  const input = quote.normalize("NFKC");
+  const markers = [
+    ...input.matchAll(
+      new RegExp(
+        "(?<![\\p{L}\\p{N}_])(" +
+          creditGroups.map((g) => g.pattern).join("|") +
+          ")(?:\\s*([:.\\-–—])\\s*|\\s+)",
+        "giu",
+      ),
+    ),
+  ];
+  return markers.flatMap((m, i) => {
+    const value = input
+      .slice(m.index! + m[0].length, markers[i + 1]?.index ?? input.length)
+      .split(/[;；\n。]/)[0]
+      .trim();
+    // A following known role bounds a sentence separator; interior punctuation
+    // remains part of the complete name (Mrs. GREEN APPLE, AC/DC, fun.).
+    const bounded = markers[i + 1] ? value.replace(/\.\s*$/, "").trim() : value;
+    if (!value) return [];
+    const explicit = !!m[2] || /\bby$|^feat(?:uring)?$/i.test(m[1]);
+    let named = true;
+    if (!explicit) {
+      const leading = input.slice(0, m.index);
+      if (!/(?:^|[;；\n。.])\s*$/.test(leading)) return [];
+      const name = withoutHandles(bounded);
+      named =
+        name.length <= 100 &&
+        name
+          .split(/\s+/)
+          .every(
+            (token, _, words) =>
+              words.length === 1 ||
+              /^[\p{Lu}\p{Lt}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(
+                token,
+              ),
+          );
+      // Lowercase predicate prose must actually describe sound. An ambiguous
+      // bare role/value stays non-descriptive, without crediting a guessed name.
+      if (!named && /^\p{Ll}/u.test(name) && descriptorWords.test(name))
+        return [];
+    }
+    const role = creditGroups.find((g) =>
+      new RegExp("^(?:" + g.pattern + ")$", "iu").test(m[1]),
+    )!.role;
+    return [{ role, value, bounded, named }];
+  });
+}
 function hasCreditAttribution(value: string) {
-  const text = value.normalize("NFKC").toLocaleLowerCase("ja");
-  // Explicit field separators attribute a role. A bare whitespace form is a
-  // credit only at a clause beginning, never the ordinary "the music/vocals ..."
-  // in descriptive prose. Copulas after a leading role word also indicate prose.
-  return (
-    new RegExp(
-      "(?<![\\p{L}\\p{N}_])" + creditRolePattern + "\\s*[:\\-–—]",
-      "u",
-    ).test(text) ||
-    new RegExp(
-      "(?:^|[;；\\n。])\\s*" +
-        creditRolePattern +
-        "\\s+(?!(?:is|are|was|were|has|have|sounds?|feels?)\\b)\\S",
-      "u",
-    ).test(text) ||
-    /\b(?:composed|produced|uploaded)\s+by\s+\S/u.test(text)
-  );
+  return creditClauses(value).length > 0;
 }
 /** Only a complete name directly attributed by the matching role clause is accepted. */
 export function explicitCredit(
@@ -105,17 +143,6 @@ export function explicitCredit(
   aliases: { name: string; quote: string }[] = [],
 ) {
   if (!norm(name)) return false;
-  const input = quote.normalize("NFKC").toLocaleLowerCase("ja");
-  const markers = [
-    ...input.matchAll(
-      new RegExp(
-        "(?<![\\p{L}\\p{N}_])(" +
-          creditGroups.map((g) => g.pattern).join("|") +
-          ")(?:\\s*[:.\\-–—]\\s*|\\s+)",
-        "gu",
-      ),
-    ),
-  ];
   const complete = (value: string) => {
     const attributed = norm(value);
     const credited = norm(name);
@@ -152,27 +179,17 @@ export function explicitCredit(
       return forms.includes(attributed) && proof === attributed;
     });
   };
-  return markers.some((m, i) => {
-    const matched = creditGroups.find((g) =>
-      new RegExp("^(?:" + g.pattern + ")$", "u").test(m[1]),
-    );
-    if (matched?.role !== role) return false;
-    const value = input
-      .slice(m.index! + m[0].length, markers[i + 1]?.index ?? input.length)
-      .split(/[;；\n。]/)[0]
-      .trim();
-    // Only a known following role marker permits a terminal sentence separator.
-    // Interior punctuation and spaces remain part of the complete credited value.
-    const bounded = markers[i + 1] ? value.replace(/\.\s*$/, "").trim() : value;
-    const withoutHandles = (v: string) =>
-      v.replace(/(?:\s+@[a-z0-9_][a-z0-9_.-]*)+\s*$/i, "").trim();
-    return (
-      complete(value) ||
-      complete(bounded) ||
-      complete(withoutHandles(value)) ||
-      complete(withoutHandles(bounded))
-    );
-  });
+  return creditClauses(quote).some(
+    ({ role: attributedRole, value, bounded, named }) => {
+      if (!named || attributedRole !== role) return false;
+      return (
+        complete(value) ||
+        complete(bounded) ||
+        complete(withoutHandles(value)) ||
+        complete(withoutHandles(bounded))
+      );
+    },
+  );
 }
 export const recordingTitleMatches = (actual: string, requested: string) =>
   norm(actual).includes(norm(requested));
@@ -265,7 +282,7 @@ export function hasDescriptors(
   return evidence.some(
     (s) =>
       (!recording || linkedRecording(s, recording)) &&
-      /\b(?:pop|rock|dance|jazz|folk|ballad|electronic|hip.hop|metal|bright|dark|warm|gentle|calm|upbeat|melancholic|refreshing|energetic|soft|powerful|clear|transparent|tempo|chorus|instrumental)\b|ジャンル|曲調|ポップ|ロック|ダンス|切な|爽やか|穏やか|透明感|ハスキー|疾走感|バラード/i.test(
+      descriptorWords.test(
         independentText(s)
           .split(/\r?\n/)
           .filter(

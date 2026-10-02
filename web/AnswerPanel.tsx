@@ -14,7 +14,7 @@ type Props = {
   pendingRegistration?: PendingRegistration;
   onCreateGuest: (name: string, deviceLabel: string) => Promise<void>;
   onRetryRegistration: () => Promise<void>;
-  onSubmit: (record: Omit<RecordCreate, "operation_id" | "participant_id">) => Promise<"cloud" | "queued">;
+  onSubmit: (record: Omit<RecordCreate, "operation_id" | "participant_id">, songTitle?: string) => Promise<"cloud" | "queued">;
   onAddDevice: () => Promise<void>;
 };
 
@@ -72,7 +72,7 @@ export function AnswerPanel({ api, selectedParticipant, credential, pendingCount
     setSubmitting(true);
     setError("");
     try {
-      const delivery = await onSubmit({ version_id: selectedCandidate.id, record_date: recordDate });
+      const delivery = await onSubmit({ version_id: selectedCandidate.id, record_date: recordDate }, `${selectedCandidate.work_title} · ${selectedCandidate.title}`);
       setTitle("");
       setArtist("");
       setReferenceUrl("");
@@ -138,7 +138,7 @@ export function AnswerPanel({ api, selectedParticipant, credential, pendingCount
         {candidates.length > 1 && <p className="candidate-count" role="status">同名の候補が{candidates.length}件あります。作品と歌唱版を確認してください。</p>}
         {candidates.length > 0 && <div className="candidate-list" aria-label="曲候補">
           {candidates.map((candidate) => {
-            const creditNames = candidate.credits.map((credit) => credit.entity_name).filter(Boolean);
+            const creditNames = candidate.credits.filter((credit) => credit.entity_name).map((credit) => `${credit.entity_name}${credit.confirmed ? "" : "（未確認）"}`);
             return <button type="button" key={candidate.id} className={`candidate-card${selectedCandidate?.id === candidate.id ? " candidate-selected" : ""}`} aria-pressed={selectedCandidate?.id === candidate.id} onClick={() => { setSelectedCandidate(candidate); setMessage(""); }}>
               <span className="candidate-title">{candidate.work_title}</span>
               <span className="candidate-version">{candidate.title} · {kindName(candidate.kind)}</span>

@@ -16,6 +16,10 @@ export interface PendingRecord {
   device_secret: string;
   record: Omit<RecordCreate, "operation_id" | "participant_id">;
   queued_at: string;
+  participant_name?: string;
+  song_title?: string;
+  /** Optional so schema-1 rows remain readable without an IndexedDB migration. */
+  failure?: { status: number; failed_at: string };
 }
 
 interface Preference {
@@ -136,6 +140,7 @@ export async function enqueueRecord(
   credential: StoredCredential,
   operationId: string,
   record: PendingRecord["record"],
+  songTitle?: string,
 ): Promise<PendingRecord> {
   const pending: PendingRecord = {
     operation_id: operationId,
@@ -143,6 +148,8 @@ export async function enqueueRecord(
     device_secret: credential.device_secret,
     record: structuredClone(record),
     queued_at: new Date().toISOString(),
+    participant_name: credential.participant.name,
+    ...(songTitle ? { song_title: songTitle.slice(0, 240) } : {}),
   };
   await put(apiBase, OUTBOX, pending);
   return pending;
@@ -160,6 +167,18 @@ export async function removeFromOutbox(apiBase: string, operationId: string): Pr
   const db = await openDatabase(apiBase);
   const transaction = db.transaction(OUTBOX, "readwrite");
   transaction.objectStore(OUTBOX).delete(operationId);
+  await transactionDone(transaction);
+}
+
+export async function markOutboxFailure(apiBase: string, operationId: string, status: number): Promise<void> {
+  const db = await openDatabase(apiBase);
+  const transaction = db.transaction(OUTBOX, "readwrite");
+  const store = transaction.objectStore(OUTBOX);
+  const request = store.get(operationId);
+  request.onsuccess = () => {
+    const entry = request.result as PendingRecord | undefined;
+    if (entry) store.put({ ...entry, failure: { status, failed_at: new Date().toISOString() } });
+  };
   await transactionDone(transaction);
 }
 

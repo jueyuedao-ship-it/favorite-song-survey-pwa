@@ -1067,6 +1067,30 @@ describe("D1 HTTP capability and mutation integrity", () => {
       expect(text).not.toContain(secret);
     expect((await api("/admin/export")).status).toBe(401);
   });
+  it("admin answer search joins participant, work and version names before opaque cursor pagination", async () => {
+    const person = await register("葵", A);
+    const work = await row("works", { title: "星の歌" });
+    const song = await version("弾き語り版", "cover", work.id);
+    const first = (await record(A, song.id, "2026-09-28")).data;
+    const second = (await record(A, song.id, "2026-09-29")).data;
+    expect(first.unresolved_title).toBeNull();
+    for (const q of ["葵", "星の歌", "弾き語り版"]) {
+      const one = await api(`/admin/records?q=${encodeURIComponent(q)}&limit=1`, "GET", undefined, admin);
+      expect(one.status).toBe(200);
+      expect(one.data.items).toHaveLength(1);
+      expect(one.data.next_cursor).toBeTruthy();
+      const two = await api(`/admin/records?q=${encodeURIComponent(q)}&limit=1&cursor=${one.data.next_cursor}`, "GET", undefined, admin);
+      expect(two.data.items).toHaveLength(1);
+      expect(new Set([one.data.items[0].id, two.data.items[0].id])).toEqual(new Set([first.id, second.id]));
+    }
+    const unresolved = (await record(A, null, "2026-09-30")).data;
+    expect((await api("/admin/records?q=Unconfirmed", "GET", undefined, admin)).data.items.map((r: any) => r.id)).toEqual([unresolved.id]);
+    expect((await api(`/admin/records?q=${first.id}`, "GET", undefined, admin)).data.items.map((r: any) => r.id)).toEqual([first.id]);
+    await api(`/records/${first.id}`, "DELETE", { operation_id: op(), expected_revision: 1 }, A);
+    expect((await api("/admin/records?q=" + encodeURIComponent(person.name), "GET", undefined, admin)).data.items).toHaveLength(2);
+    expect((await api("/admin/records?include_deleted=true&q=" + encodeURIComponent(person.name), "GET", undefined, admin)).data.items).toHaveLength(3);
+    expect((await api("/admin/records?q=" + encodeURIComponent(person.name))).status).toBe(401);
+  });
   it("preserves work/version distinction, entity aliases and distinct credit roles in statistics", async () => {
     const person = await register("A", A);
     const original = await version("Same title");
@@ -1116,14 +1140,15 @@ describe("D1 HTTP capability and mutation integrity", () => {
         `/statistics?participant_id=${person.id}&from=2026-09-28&to=2026-09-30`,
       )
     ).data;
-    expect(stats.roles.vocalist[0]).toMatchObject({
-      entity_id: singer.id,
-      count: 1,
-    });
-    expect(stats.roles.composer[0]).toMatchObject({
-      entity_id: composer.id,
-      count: 1,
-    });
+    expect(stats.roles.vocalist).toEqual([]);
+    expect(stats.roles.composer).toEqual([]);
+    const provisional = (await api("/admin/data/credits", "GET", undefined, admin)).data.items;
+    expect(provisional).toHaveLength(2);
+    expect(provisional.every((credit: any) => credit.confirmed === false)).toBe(true);
+    await row("credits", { version_id: cover.id, entity_id: singer.id, role: "release_name", source_id: null, confirmed: true, manual_lock: true });
+    const confirmedStats = (await api("/statistics?from=2026-09-28&to=2026-09-30")).data;
+    expect(confirmedStats.roles.release_name).toEqual([{ entity_id: singer.id, name: "倚水", count: 1 }]);
+    expect(confirmedStats.total_records).toBe(3);
     const candidates = await api("/catalog/search?q=isui");
     expect(candidates.data.items.some((v: any) => v.id === cover.id)).toBe(
       true,

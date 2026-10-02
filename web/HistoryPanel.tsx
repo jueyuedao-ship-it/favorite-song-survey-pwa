@@ -4,6 +4,7 @@ import { createApi } from "./api";
 import { todayInJapan } from "./dates";
 import { newOperationId } from "./storage";
 import type { StoredCredential } from "./storage";
+import { useVisibleRefresh } from "./useVisibleRefresh";
 
 type SurveyApi = ReturnType<typeof createApi>;
 type Props = { api: SurveyApi; participant?: Participant; credential?: StoredCredential; online: boolean };
@@ -23,47 +24,75 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
   const [songDetails, setSongDetails] = useState<Record<string, SongDetail>>({});
   const [loadingVersionIds, setLoadingVersionIds] = useState<Set<string>>(new Set());
   const [unavailableVersionIds, setUnavailableVersionIds] = useState<Set<string>>(new Set());
-  const requestedVersionIds = useRef(new Set<string>());
+  const loadedPages = useRef(1);
+  const recordGeneration = useRef(0);
+  const scopeSignal = useRef<AbortSignal | undefined>(undefined);
+  const detailIds = useRef(new Set<string>());
+  const participantId = participant?.id;
 
-  const load = useCallback(async (cursor?: string | null, append = false) => {
-    if (!participant) { setRecords([]); return; }
+  const load = useCallback(async (cursor?: string | null, append = false, signal = scopeSignal.current) => {
+    const generation = ++recordGeneration.current;
+    const current = () => !signal?.aborted && generation === recordGeneration.current;
+    if (!participantId) { setRecords([]); return; }
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({ participant_id: participant.id, limit: "100" });
-      if (cursor) params.set("cursor", cursor);
-      const data = await api.get<Page<SurveyRecord>>(`/records?${params}`);
-      setRecords((current) => append ? [...current, ...data.items] : data.items);
-      setNextCursor(data.next_cursor);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "履歴を読み込めませんでした。"); }
-    finally { setLoading(false); }
-  }, [api, participant]);
-
-  useEffect(() => { void load(); }, [load]);
+      let next = cursor ?? null;
+      const items: SurveyRecord[] = [];
+      const pageCount = append ? 1 : loadedPages.current;
+      for (let i = 0; i < pageCount; i++) {
+        const params = new URLSearchParams({ participant_id: participantId, limit: "100" });
+        if (next) params.set("cursor", next);
+        const data = await api.get<Page<SurveyRecord>>(`/records?${params}`, { signal });
+        if (!current()) return;
+        items.push(...data.items);
+        next = data.next_cursor;
+        if (!next) break;
+      }
+      if (append) loadedPages.current++;
+      setRecords((prior) => append ? [...prior.filter((r) => !items.some((item) => item.id === r.id)), ...items] : items);
+      setNextCursor(next);
+      const ids = [...new Set(items.flatMap((record) => record.version_id ? [record.version_id] : []))]
+        .filter((id) => !append || !detailIds.current.has(id));
+      setLoadingVersionIds(new Set(ids));
+      const entries = await Promise.all(ids.map(async (id) => {
+        try { return [id, await api.get<SongDetail>(`/catalog/versions/${encodeURIComponent(id)}`, { signal })] as const; }
+        catch { return [id, undefined] as const; }
+      }));
+      if (!current()) return;
+      for (const [id, detail] of entries) { if (detail) detailIds.current.add(id); else detailIds.current.delete(id); }
+      setSongDetails((prior) => {
+        const next = { ...prior };
+        for (const [id, detail] of entries) { if (detail) next[id] = detail; else delete next[id]; }
+        return next;
+      });
+      setUnavailableVersionIds((prior) => {
+        const next = new Set(prior);
+        for (const [id, detail] of entries) { if (detail) next.delete(id); else next.add(id); }
+        return next;
+      });
+      setLoadingVersionIds(new Set());
+    } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : "履歴を読み込めませんでした。"); }
+    finally { if (current()) setLoading(false); }
+  }, [api, participantId]);
 
   useEffect(() => {
-    const missing = [...new Set(records.flatMap((record) => record.version_id ? [record.version_id] : []))]
-      .filter((versionId) => !requestedVersionIds.current.has(versionId));
-    if (!missing.length) return;
-    for (const versionId of missing) requestedVersionIds.current.add(versionId);
-    setLoadingVersionIds((current) => new Set([...current, ...missing]));
-    void Promise.all(missing.map(async (versionId) => {
-      try {
-        return [versionId, await api.get<SongDetail>(`/catalog/versions/${encodeURIComponent(versionId)}`)] as const;
-      } catch {
-        return [versionId, undefined] as const;
-      }
-    })).then((entries) => {
-      setSongDetails((current) => ({ ...current, ...Object.fromEntries(entries.filter((entry): entry is readonly [string, SongDetail] => Boolean(entry[1]))) }));
-      setUnavailableVersionIds((current) => new Set([...current, ...entries.filter((entry) => !entry[1]).map(([id]) => id)]));
-      setLoadingVersionIds((current) => new Set([...current].filter((id) => !missing.includes(id))));
-    });
-  }, [api, records]);
+    loadedPages.current = 1;
+    detailIds.current.clear();
+    setEditing(undefined);
+    setRecords([]);
+    setSongDetails({});
+  }, [api, participantId]);
+  const refresh = useCallback(async (signal: AbortSignal) => {
+    scopeSignal.current = signal;
+    await load(undefined, false, signal);
+  }, [load]);
+  useVisibleRefresh(refresh);
 
   function startEdit(record: SurveyRecord) {
     setEditing(record);
     setRecordDate(record.record_date);
-    setSearchTitle(record.unresolved_title ?? "");
+    setSearchTitle(record.version_id ? songDetails[record.version_id]?.version.title ?? record.unresolved_title ?? "" : record.unresolved_title ?? "");
     setSelectedVersion(record.version_id ?? "");
     setCandidates([]);
     setCandidateStatus("");
@@ -107,15 +136,25 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
         expected_revision: editing.revision,
         record_date: recordDate,
       };
-      if (selectedVersion) update.version_id = selectedVersion;
-      else if (searchTitle.trim()) {
+      const unchanged = selectedVersion === (editing.version_id ?? "") && (Boolean(selectedVersion) || searchTitle.trim() === (editing.unresolved_title ?? ""));
+      if (!unchanged && selectedVersion) {
+        update.version_id = selectedVersion;
+        update.unresolved_title = null;
+        update.artist_hint = null;
+        update.reference_url = null;
+      } else if (!selectedVersion && searchTitle.trim()) {
         update.version_id = null;
         update.unresolved_title = searchTitle.trim();
+        if (!unchanged) { update.artist_hint = null; update.reference_url = null; }
+      } else if (!selectedVersion) {
+        setError("未特定として保存する曲名を入力してください。");
+        return;
       }
       const row = await api.patch<SurveyRecord>(`/records/${encodeURIComponent(editing.id)}`, update, credential.device_secret);
       setRecords((current) => current.map((item) => item.id === row.id ? row : item));
       setEditing(undefined);
       setNotice("自分の記録を更新しました。");
+      void load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "記録を更新できませんでした。"); }
   }
 
@@ -132,17 +171,17 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
 
   if (!participant) return <section className="content-panel empty-state"><h2>自分の記録</h2><p>表示する参加者を選んでください。</p></section>;
   return <section className="content-panel history-panel">
-    <header className="section-heading"><div><p className="eyebrow">記録の振り返り</p><h2>{participant.name}さんの曲の履歴</h2><p>記録日が新しい順です。</p></div>
+    <header className="section-heading"><div><p className="eyebrow">記録の振り返り</p><h2>{participant.name}さんの曲の履歴</h2><p>保存された記録を一覧表示します。表示順は記録日順ではありません。</p></div>
       {!credential && <span className="read-only-label">閲覧のみ</span>}
     </header>
     {error && <p role="alert" className="notice notice-error">{error}</p>}
     {notice && <p role="status" className="notice notice-success">{notice}</p>}
     {loading && <p role="status">履歴を読み込んでいます…</p>}
-    {records.length ? <div className="history-list">{records.map((record) => {
+    {(records.length || editing) ? <div className="history-list">{(editing && !records.some((r) => r.id === editing.id) ? [...records, editing] : records).map((record) => {
       const own = Boolean(credential && credential.participant_id === participant.id && credential.participant_id === record.participant_id);
       const song = record.version_id ? songDetails[record.version_id] : undefined;
-      const vocalistNames = song ? [...new Set(song.credits.filter((credit) => credit.role === "vocalist").map((credit) => credit.entity.name))] : [];
-      const releaseNames = song ? [...new Set(song.credits.filter((credit) => credit.role === "release_name").map((credit) => credit.entity.name))] : [];
+      const vocalistNames = song ? [...new Set(song.credits.filter((credit) => credit.role === "vocalist").map((credit) => `${credit.entity.name}${credit.confirmed ? "" : "（未確認）"}`))] : [];
+      const releaseNames = song ? [...new Set(song.credits.filter((credit) => credit.role === "release_name").map((credit) => `${credit.entity.name}${credit.confirmed ? "" : "（未確認）"}`))] : [];
       const creditSummary = [
         vocalistNames.length ? `ボーカル: ${vocalistNames.join("・")}` : "",
         releaseNames.length ? `発表名義: ${releaseNames.join("・")}` : "",
@@ -171,12 +210,17 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
         {own && editing?.id === record.id && <form className="editor-form history-editor" onSubmit={saveEdit}>
           <h4>記録を編集</h4>
           <label>記録日<input type="date" value={recordDate} max={todayInJapan()} onChange={(event) => setRecordDate(event.target.value)} required /></label>
-          {!record.version_id && <>
-            <label>曲名<input value={searchTitle} maxLength={240} onChange={(event) => setSearchTitle(event.target.value)} /></label>
+          <>
+            <div className="button-row">
+              <button type="button" className="quiet-button" aria-pressed={selectedVersion === (editing.version_id ?? "")} onClick={() => { setSelectedVersion(editing.version_id ?? ""); setSearchTitle(editing.version_id ? songDetails[editing.version_id]?.version.title ?? editing.unresolved_title ?? "" : editing.unresolved_title ?? ""); }}>現在の曲を保持</button>
+              <button type="button" className="quiet-button" aria-pressed={!selectedVersion} onClick={() => setSelectedVersion("")}>未特定の曲名に切り替える</button>
+            </div>
+            <label>曲名<input value={searchTitle} maxLength={240} onChange={(event) => { setSearchTitle(event.target.value); setSelectedVersion(""); setCandidates([]); }} required={!selectedVersion} /></label>
+            <p className="muted-note">{selectedVersion ? "選択した版を保存します。" : "入力した曲名を未特定として保存します。"} 曲を変更すると以前の歌手補足・参照URLは解除されます。</p>
             <div className="button-row"><button type="button" className="secondary-button" onClick={() => void searchCatalog()}>候補を探す</button><span role="status">{candidateStatus}</span></div>
             {candidates.map((candidate) => <button type="button" className={`candidate-card${selectedVersion === candidate.id ? " candidate-selected" : ""}`} aria-pressed={selectedVersion === candidate.id} key={candidate.id} onClick={() => setSelectedVersion(candidate.id)}>{candidate.work_title} · {candidate.title}</button>)}
-          </>}
-          <div className="button-row"><button className="primary-button" type="submit">記録を保存</button><button type="button" className="quiet-button" onClick={() => setEditing(undefined)}>閉じる</button></div>
+          </>
+          <div className="button-row"><button className="primary-button" type="submit" disabled={!online}>記録を保存</button><button type="button" className="quiet-button" onClick={() => setEditing(undefined)}>閉じる</button></div>
         </form>}
       </article>;
     })}</div> : !loading && <p className="empty-state">この参加者の回答はまだありません。</p>}

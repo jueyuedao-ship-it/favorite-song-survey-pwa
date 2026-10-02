@@ -1,7 +1,7 @@
 # Windows PowerShell 5.1 / PowerShell 7. Current user only; no elevation or passwords.
 [CmdletBinding()]
 param(
-    [string]$ConfigPath = (Join-Path (Split-Path -Parent $PSScriptRoot) '.local/collector.json'),
+    [string]$ConfigPath = '',
     [switch]$PlanOnly,
     [switch]$Uninstall
 )
@@ -23,6 +23,7 @@ function Assert-InWorkspace([string]$Candidate, [switch]$MustExist) {
 }
 
 try {
+    if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath = Join-Path $workspace '.local/collector.json' }
     if ($Uninstall) {
         if (-not (Test-Path -LiteralPath $statePath)) { throw 'No owned collector task metadata found' }
         $owned = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json

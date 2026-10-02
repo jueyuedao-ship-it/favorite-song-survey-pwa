@@ -402,20 +402,34 @@ async function route(request: Request, env: WorkerEnv): Promise<Response> {
       };
     });
   }
-  if (path === "/admin/records" && method === "GET")
+  if (path === "/admin/records" && method === "GET") {
+    const rows = await allRows(env.DB, "responses", url.searchParams.get("include_deleted") !== "true");
+    const q = url.searchParams.get("q")?.toLocaleLowerCase("ja");
+    let matching = rows;
+    if (q) {
+      // Read-only display joins, before filtering/pagination. Include retained
+      // labels for tombstones; authentication above still protects this route.
+      const [participants, versions, works] = await Promise.all([
+        allRows(env.DB, "participants", false), allRows(env.DB, "versions", false), allRows(env.DB, "works", false),
+      ]);
+      const people = new Map(participants.map((p) => [p.id, p.name]));
+      const songs = new Map(versions.map((v) => [v.id, v]));
+      const titles = new Map(works.map((w) => [w.id, w.title]));
+      matching = rows.filter((record) => {
+        const song = record.version_id ? songs.get(record.version_id) : undefined;
+        return [JSON.stringify(record), people.get(record.participant_id), song?.title, song ? titles.get(song.work_id) : undefined]
+          .some((value) => value?.toLocaleLowerCase("ja").includes(q));
+      });
+    }
+    const filters = new URL(url);
+    filters.searchParams.delete("q");
     return ok(
       page(
-        recordsFilter(
-          await allRows(
-            env.DB,
-            "responses",
-            url.searchParams.get("include_deleted") !== "true",
-          ),
-          url,
-        ),
+        recordsFilter(matching, filters),
         url,
       ),
     );
+  }
   const adminRecord = path.match(
     /^\/admin\/records(?:\/([^/]+))?(?:\/(resolve))?$/,
   );

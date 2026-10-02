@@ -128,13 +128,9 @@ export async function statistics(
     for (const r of records) {
       const ids = new Set(
         credits
-          .filter((c) => c.version_id === r.version_id && c.role === role)
+          .filter((c) => c.version_id === r.version_id && c.role === role && c.confirmed)
           .map((c) => c.entity_id),
       );
-      if (role === "uploader") {
-        const v = versions.find((v) => v.id === r.version_id);
-        if (v?.uploader_entity_id) ids.add(v.uploader_entity_id);
-      }
       for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
     }
     roles[role] = [...counts]

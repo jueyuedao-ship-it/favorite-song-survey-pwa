@@ -11,6 +11,29 @@ INSTALLER = ROOT / 'scripts' / 'install-collector.ps1'
 
 
 class InstallerTests(unittest.TestCase):
+    def test_powershell51_default_config_plan_only_resolves_inside_script_body(self):
+        # A separate workspace exercises the documented no-ConfigPath entrypoint
+        # without reading production credentials or changing the installed task.
+        powershell = shutil.which('powershell')
+        with tempfile.TemporaryDirectory(dir=ROOT / 'collector' / 'tests') as directory:
+            workspace = Path(directory)
+            for folder in ('scripts', 'collector', '.local'):
+                (workspace / folder).mkdir()
+            installer = workspace / 'scripts' / 'install-collector.ps1'
+            shutil.copyfile(INSTALLER, installer)
+            shutil.copyfile(ROOT / 'scripts' / 'setup-run-collector.ps1', workspace / 'scripts' / 'setup-run-collector.ps1')
+            shutil.copyfile(ROOT / 'collector' / 'mirror.py', workspace / 'collector' / 'mirror.py')
+            (workspace / '.local' / 'collector.json').write_text(json.dumps(dict(
+                api_base='http://127.0.0.1:8791/api/v1', sync_token='fixture-default-token', development=True,
+                database=str(workspace / 'mirror.sqlite'), backups=str(workspace / 'backups'), collector_id='pc-default')))
+            result = subprocess.run([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(installer), '-PlanOnly'],
+                                    capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            plan = json.loads(result.stdout)
+            self.assertFalse(plan['registered'])
+            self.assertNotIn('fixture-default-token', result.stdout + result.stderr)
+            self.assertFalse((workspace / '.local' / 'collector-task.json').exists())
+
     def test_plan_current_user_hidden_logon_and_five_minutes_without_registration(self):
         self.assertTrue(INSTALLER.exists(), 'scheduler installer is missing')
         powershell = shutil.which('powershell') or shutil.which('pwsh')

@@ -180,8 +180,8 @@ describe("回答と端末の本人情報", () => {
     await user.type(await screen.findByLabelText("曲名"), "夜明け");
     await user.click(screen.getByRole("button", { name: "曲を検索" }));
     expect(await screen.findByText("同名の候補が2件あります。作品と歌唱版を確認してください。")).toBeInTheDocument();
-    expect(screen.getByText("倚水")).toBeInTheDocument();
-    expect(screen.getByText("青葉")).toBeInTheDocument();
+    expect(screen.getByText("倚水（未確認）")).toBeInTheDocument();
+    expect(screen.getByText("青葉（未確認）")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /夜明け \(cover\)/ }));
     await user.click(screen.getByRole("button", { name: "回答を送信" }));
     await screen.findAllByText("クラウドに保存しました。");
@@ -612,8 +612,8 @@ describe("最終UI統合", () => {
         version: version("v-shared", "弾き語り版"),
         work: { id: "work-shared", title: "夏の記憶" },
         credits: [
-          { id: "credit-vocal", role: "vocalist", entity: { id: "entity-vocal", name: "倚水" } },
-          { id: "credit-release", role: "release_name", entity: { id: "entity-release", name: "isui" } },
+          { id: "credit-vocal", role: "vocalist", confirmed: true, entity: { id: "entity-vocal", name: "倚水" } },
+          { id: "credit-release", role: "release_name", confirmed: true, entity: { id: "entity-release", name: "isui" } },
         ],
         tags: [],
         sources: [],

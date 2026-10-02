@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { CreditRole, Statistics } from "../shared/contracts";
 import { todayInJapan } from "./dates";
+import { useVisibleRefresh } from "./useVisibleRefresh";
 
-type ApiReader = { get<T>(path: string): Promise<T> };
+type ApiReader = { get<T>(path: string, options?: { signal?: AbortSignal }): Promise<T> };
 type Props = { api: ApiReader; participantId?: string; mode: "rankings" | "personal" };
 
-const periodNames = { all: "全期間", week: "今週", month: "今月", day: "今日" } as const;
+const periodNames = { all: "全期間", week: "週", month: "月", day: "日", custom: "任意期間" } as const;
 const roleNames: Record<CreditRole, string> = {
   vocalist: "ボーカル",
   composer: "作曲者",
@@ -23,29 +24,37 @@ export function StatisticsPanel({ api, participantId, mode }: Props) {
   const [statistics, setStatistics] = useState<Statistics>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [anchor, setAnchor] = useState(todayInJapan());
+  const [from, setFrom] = useState(todayInJapan());
+  const [to, setTo] = useState(todayInJapan());
+  const [display, setDisplay] = useState<"count" | "percentage">("percentage");
+  const validDate = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(`${date}T00:00:00Z`)) && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+  const dateError = !validDate(anchor) || (period === "custom" && (!validDate(from) || !validDate(to) || from > to))
+    ? "基準日と期間の開始・終了を確認してください。" : "";
 
   const query = useMemo(() => {
-    const params = new URLSearchParams({ period, anchor: todayInJapan(), group_by: groupBy });
+    const params = new URLSearchParams({ period: period === "custom" ? "all" : period, anchor, group_by: groupBy });
+    if (period === "custom") { params.set("from", from); params.set("to", to); }
     if (mode === "personal" && participantId) params.set("participant_id", participantId);
     return params.toString();
-  }, [groupBy, mode, participantId, period]);
+  }, [groupBy, mode, participantId, period, anchor, from, to]);
 
-  useEffect(() => {
+  const refresh = useCallback(async (signal: AbortSignal) => {
     if (mode === "personal" && !participantId) {
       setStatistics(undefined);
       return;
     }
-    let current = true;
+    if (dateError) { setLoading(false); return; }
     setLoading(true);
     setError("");
-    api.get<Statistics>(`/statistics?${query}`)
-      .then((data) => { if (current) setStatistics(data); })
-      .catch((reason: unknown) => {
-        if (current) setError(reason instanceof Error ? reason.message : "統計を読み込めませんでした。");
-      })
-      .finally(() => { if (current) setLoading(false); });
-    return () => { current = false; };
-  }, [api, mode, participantId, query]);
+    try {
+      const data = await api.get<Statistics>(`/statistics?${query}`, { signal });
+      if (!signal.aborted) setStatistics(data);
+    } catch (reason) {
+      if (!signal.aborted) setError(reason instanceof Error ? reason.message : "統計を読み込めませんでした。");
+    } finally { if (!signal.aborted) setLoading(false); }
+  }, [api, mode, participantId, query, dateError]);
+  useVisibleRefresh(refresh);
 
   if (mode === "personal" && !participantId) {
     return <section className="empty-state"><h2>個人統計</h2><p>表示する参加者を選んでください。</p></section>;
@@ -63,6 +72,11 @@ export function StatisticsPanel({ api, participantId, mode }: Props) {
             {Object.entries(periodNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
+        <label>基準日<input type="date" value={anchor} onChange={(event) => setAnchor(event.target.value)} required /></label>
+        {period === "custom" && <>
+          <label>開始日<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} required /></label>
+          <label>終了日<input type="date" value={to} onChange={(event) => setTo(event.target.value)} required /></label>
+        </>}
         <label>曲のまとめ方
           <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as "work" | "version")}>
             <option value="work">作品ごと</option>
@@ -73,7 +87,7 @@ export function StatisticsPanel({ api, participantId, mode }: Props) {
     </header>
 
     {loading && <p className="inline-status" role="status">集計を読み込んでいます…</p>}
-    {error && <p className="notice notice-error" role="alert">{error}</p>}
+    {(dateError || error) && <p className="notice notice-error" role="alert">{dateError || error}</p>}
     {statistics && <>
       <div className="summary-strip" aria-label="集計概要">
         <div><strong>{statistics.total_records}</strong><span>有効な回答</span></div>
@@ -97,7 +111,8 @@ export function StatisticsPanel({ api, participantId, mode }: Props) {
       </section> : <>
         <section className="subsection tag-section">
           <div className="section-heading compact-heading">
-            <div><h3>タグの週ごとの推移</h3><p>直近12週。割合の分母は未解析を含む全回答数です。</p></div>
+            <div><h3>タグの週ごとの推移</h3><p>基準日までの12週（月曜開始）。割合の分母は未解析を含む各週の全回答数です。</p></div>
+            <label>表示方法<select value={display} onChange={(event) => setDisplay(event.target.value as "count" | "percentage")}><option value="percentage">割合</option><option value="count">件数</option></select></label>
           </div>
           {statistics.weekly_tags.length === 0 || statistics.weekly_tags.every((week) => week.tags.length === 0)
             ? <p className="empty-state">タグが確認された回答はまだありません。未解析の回答は個人履歴に残ります。</p>
@@ -108,10 +123,10 @@ export function StatisticsPanel({ api, participantId, mode }: Props) {
                   viewBox={`0 0 760 ${Math.max(130, statistics.weekly_tags.reduce((total, week) => total + Math.max(1, week.tags.length), 0) * 31 + 40)}`}>
                   {(() => {
                     const rows = statistics.weekly_tags.flatMap((week) => week.tags.map((tag) => ({ week, tag })));
-                    const maximum = Math.max(1, ...rows.map(({ tag }) => tag.percentage));
+                    const maximum = Math.max(1, ...rows.map(({ tag }) => display === "count" ? tag.count : tag.percentage));
                     return rows.map(({ week, tag }, index) => {
                       const y = index * 31 + 26;
-                      const width = Math.max(2, (tag.percentage / maximum) * 430);
+                      const width = Math.max(2, ((display === "count" ? tag.count : tag.percentage) / maximum) * 430);
                       return <g key={`${week.week_start}-${tag.tag_id}`}>
                         <text x="8" y={y + 14} className="chart-week">{week.week_start}</text>
                         <text x="102" y={y + 14} className="chart-tag">{tag.name}</text>

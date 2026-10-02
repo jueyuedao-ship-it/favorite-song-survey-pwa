@@ -8,6 +8,8 @@ import { formatJapaneseDateTime } from "./dates";
 import { HistoryPanel } from "./HistoryPanel";
 import { InviteShare } from "./InviteShare";
 import { StatisticsPanel } from "./StatisticsPanel";
+import { OutboxPanel } from "./OutboxPanel";
+import { useVisibleRefresh } from "./useVisibleRefresh";
 import {
   clearPendingRegistration,
   createSecret,
@@ -16,6 +18,7 @@ import {
   getSelectedParticipant,
   listCredentials,
   listOutbox,
+  markOutboxFailure,
   newOperationId,
   removeFromOutbox,
   saveCredential,
@@ -23,6 +26,7 @@ import {
   saveSelectedParticipant,
   type PendingRegistration,
   type StoredCredential,
+  type PendingRecord,
 } from "./storage";
 import type { GuestClaim, GuestCreate, GuestIdentity, Page, RecordCreate as RecordCreateBody } from "../shared/contracts";
 
@@ -49,6 +53,8 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
   const [credentials, setCredentials] = useState<StoredCredential[]>([]);
   const [pendingRegistration, setPendingRegistration] = useState<PendingRegistration | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
+  const [pendingRecords, setPendingRecords] = useState<PendingRecord[]>([]);
+  const [outboxBusy, setOutboxBusy] = useState(false);
   const [adminToken, setAdminToken] = useState<string | null>(null);
   const [adminPassword, setAdminPassword] = useState("");
   const [notice, setNotice] = useState("");
@@ -59,6 +65,9 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
   const replaying = useRef(false);
   const registering = useRef(false);
   const selectedParticipantRef = useRef("");
+  const peoplePages = useRef(1);
+  const peopleGeneration = useRef(0);
+  const peopleSignal = useRef<AbortSignal | undefined>(undefined);
   selectedParticipantRef.current = selectedParticipantId;
   const currentParticipant = participants.find((person) => person.id === selectedParticipantId);
   const credential = credentials.find((item) => item.participant_id === selectedParticipantId);
@@ -66,20 +75,31 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
   const basePath = env?.BASE_URL ?? "./";
 
   const refreshOutbox = useCallback(async () => {
-    try { setPendingCount((await listOutbox(apiBase)).length); }
+    try { const entries = await listOutbox(apiBase); setPendingCount(entries.length); setPendingRecords(entries); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "送信待ちの記録を読み込めませんでした。"); }
   }, [apiBase]);
 
-  const refreshParticipants = useCallback(async (cursor?: string | null, append = false) => {
+  const refreshParticipants = useCallback(async (cursor?: string | null, append = false, signal = peopleSignal.current) => {
+    const generation = ++peopleGeneration.current;
+    const current = () => !signal?.aborted && generation === peopleGeneration.current;
     try {
-      const params = new URLSearchParams({ limit: "100" });
-      if (cursor) params.set("cursor", cursor);
-      const page = await api.get<Page<Participant>>(`/participants?${params}`);
-      setParticipants((current) => append ? [...current, ...page.items] : page.items);
-      setPeopleNextCursor(page.next_cursor);
-      return page.items;
+      let next = cursor ?? null;
+      const items: Participant[] = [];
+      for (let i = 0; i < (append ? 1 : peoplePages.current); i++) {
+        const params = new URLSearchParams({ limit: "100" });
+        if (next) params.set("cursor", next);
+        const page = await api.get<Page<Participant>>(`/participants?${params}`, { signal });
+        if (!current()) return [];
+        items.push(...page.items);
+        next = page.next_cursor;
+        if (!next) break;
+      }
+      if (append) peoplePages.current++;
+      setParticipants((prior) => append ? [...prior.filter((person) => !items.some((item) => item.id === person.id)), ...items] : items);
+      setPeopleNextCursor(next);
+      return items;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "参加者を読み込めませんでした。");
+      if (current()) setError(reason instanceof Error ? reason.message : "参加者を読み込めませんでした。");
       return [];
     }
   }, [api]);
@@ -119,13 +139,15 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
     } finally { registering.current = false; }
   }, [api, apiBase, refreshParticipants]);
 
-  const replayOutbox = useCallback(async () => {
+  const replayOutbox = useCallback(async (retryOperation?: string) => {
     if (replaying.current || !navigator.onLine) return;
     replaying.current = true;
+    setOutboxBusy(true);
     try {
       const pending = await listOutbox(apiBase);
       setPendingCount(pending.length);
       for (const entry of pending) {
+        if (retryOperation ? entry.operation_id !== retryOperation : Boolean(entry.failure)) continue;
         const body: RecordCreateBody = { ...entry.record, operation_id: entry.operation_id };
         try {
           await api.post("/records", body, entry.device_secret);
@@ -133,15 +155,19 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
           setPendingCount((count) => Math.max(0, count - 1));
           setNotice("送信待ちの回答をクラウドへ保存しました。");
         } catch (reason) {
-          const message = reason instanceof Error ? reason.message : "送信待ちの回答を送れませんでした。";
-          setError(message);
+          if (reason instanceof ApiError && [400, 401, 403, 404, 409, 422].includes(reason.status)) {
+            await markOutboxFailure(apiBase, entry.operation_id, reason.status);
+            setNotice("送信できなかった回答は端末に残しました。確認が必要な送信待ちから再試行または削除できます。");
+            continue;
+          }
+          setError("送信待ちの回答を送れませんでした。接続またはサーバーの状態を確認してください。");
           setNotice("送信待ちの回答は端末に残しています。本人確認または通信を確認して再試行します。");
           break;
         }
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : "送信待ちを確認できませんでした。"); }
-    finally { replaying.current = false; }
-  }, [api, apiBase]);
+    finally { await refreshOutbox(); replaying.current = false; setOutboxBusy(false); }
+  }, [api, apiBase, refreshOutbox]);
 
   useEffect(() => {
     let live = true;
@@ -154,6 +180,8 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
         setSelectedParticipantId(selected ?? "");
         setCredentials(savedCredentials);
         setPendingCount(outbox.length);
+        setPendingRecords(outbox);
+        setOutboxBusy(navigator.onLine);
         setBooted(true);
         let pending = savedRegistration;
         const inviteSecret = inviteSecretFromHash(globalThis.location.hash);
@@ -173,15 +201,18 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
     return () => { live = false; };
   }, [apiBase, completeRegistration]);
 
-  useEffect(() => {
-    if (!booted) return;
-    void refreshParticipants().then((items) => {
+  useEffect(() => { peoplePages.current = 1; }, [api]);
+  const refreshPublicParticipants = useCallback(async (signal: AbortSignal) => {
+    peopleSignal.current = signal;
+    const items = await refreshParticipants(undefined, false, signal);
+    if (!signal.aborted) {
       if (!selectedParticipantRef.current && items[0]) {
         setSelectedParticipantId(items[0].id);
         void saveSelectedParticipant(apiBase, items[0].id);
       }
-    });
-  }, [apiBase, booted, refreshParticipants, selectedParticipantId]);
+    }
+  }, [apiBase, refreshParticipants]);
+  useVisibleRefresh(refreshPublicParticipants, booted);
 
   useEffect(() => {
     if (booted && online) void replayOutbox();
@@ -261,12 +292,12 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
     setNotice("一度だけ使える端末追加リンクを作成しました。");
   }
 
-  async function submitRecord(record: Omit<RecordCreate, "operation_id" | "participant_id">) {
+  async function submitRecord(record: Omit<RecordCreate, "operation_id" | "participant_id">, songTitle?: string) {
     if (!credential || credential.participant_id !== selectedParticipantId) throw new Error("この閲覧名の本人端末は登録されていません。招待を受け取ってから回答してください。");
     const operationId = newOperationId();
     const body: RecordCreateBody = { ...record, operation_id: operationId };
     if (!navigator.onLine) {
-      await enqueueRecord(apiBase, credential, operationId, record);
+      await enqueueRecord(apiBase, credential, operationId, record, songTitle);
       await refreshOutbox();
       setNotice("端末内に送信待ちで保存しました。クラウドにはまだ反映されていません。");
       return "queued";
@@ -277,7 +308,7 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
       return "cloud";
     } catch (reason) {
       if (!isTransportFailure(reason)) throw reason;
-      await enqueueRecord(apiBase, credential, operationId, record);
+      await enqueueRecord(apiBase, credential, operationId, record, songTitle);
       await refreshOutbox();
       setNotice("通信に失敗したため、回答を端末内の送信待ちに保存しました。クラウドには未反映です。");
       return "queued";
@@ -348,6 +379,10 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
       <button type="button" aria-label="メッセージを閉じる" onClick={() => { setError(""); setNotice(""); }}>閉じる</button>
     </div>}
     {updateWaiting && <div className="update-banner" role="status"><span>新しいアプリ版を利用できます。</span><button type="button" className="primary-button" onClick={() => updateWaiting.postMessage({ type: "SKIP_WAITING" })}>更新して再読み込み</button></div>}
+    <OutboxPanel api={api} entries={pendingRecords} participants={participants} online={online} busy={outboxBusy} onRetry={(operation) => { void replayOutbox(operation); }} onRemove={(operation) => {
+      if (replaying.current) return;
+      void removeFromOutbox(apiBase, operation).then(() => refreshOutbox()).catch(() => setError("端末内の送信待ちを削除できませんでした。"));
+    }} />
 
     {view === "answer" && <AnswerPanel api={api} selectedParticipant={currentParticipant} credential={credential} pendingCount={pendingCount} online={online} pendingRegistration={pendingRegistration ?? undefined} onRetryRegistration={retryRegistration} onCreateGuest={createGuest} onSubmit={submitRecord} onAddDevice={addDevice} />}
     {view === "rankings" && <StatisticsPanel api={api} mode="rankings" />}

@@ -70,7 +70,7 @@ npm.cmd run collector:once
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-collector.ps1 -PlanOnly
 ```
 
-`setup:collector` は検証済みの本番APIと私的な同期トークンから `.local/collector.json` を作ります。`-PlanOnly` はタスクXMLを表示し、登録は行いません。秘密値はXMLや引数に含みません。
+`setup:collector` は検証済みの本番APIと私的な同期トークンから `.local/collector.json` を作ります。`ConfigPath` を省略した場合、スクリプトのあるプロジェクトの `.local/collector.json` をWindows PowerShell 5.1 / PowerShell 7で使用します。`-PlanOnly` はタスクXMLを表示し、登録は行いません。秘密値はXMLや引数に含みません。
 
 実行確認が済んだら、現在ユーザーで登録します。
 

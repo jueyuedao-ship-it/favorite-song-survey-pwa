@@ -304,6 +304,21 @@ describe("D1 HTTP capability and mutation integrity", () => {
     expect(response.status).toBe(200);expect(queries).toBeLessThanOrEqual(50);
     expect((await api('/catalog/versions/'+song.id)).data.tags).toHaveLength(50);
   });
+  it("allows only one active answer per participant and day, then allows another after deletion", async () => {
+    await register("A", A);
+    const firstSong = await version("First daily song");
+    const secondSong = await version("Second daily song");
+    const first = await record(A, firstSong.id, "2026-09-30");
+    expect(first.status).toBe(201);
+    expect((await record(A, secondSong.id, "2026-09-30")).status).toBe(409);
+    expect((await api(
+      `/records/${first.data.id}`,
+      "DELETE",
+      { operation_id: op(), expected_revision: first.data.revision },
+      A,
+    )).status).toBe(200);
+    expect((await record(A, secondSong.id, "2026-09-30")).status).toBe(201);
+  });
   it("a new answer selecting a catalog candidate also queues incomplete tag research", async () => {
     await register("A",A);const song=await version();
     const job=(await api("/admin/jobs","GET",undefined,admin)).data.items.find((j:any)=>j.version_id===song.id);

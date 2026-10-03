@@ -5,6 +5,7 @@ import { todayInJapan } from "./dates";
 import { newOperationId } from "./storage";
 import type { StoredCredential } from "./storage";
 import { useVisibleRefresh } from "./useVisibleRefresh";
+import { SongTagEditor, type SongTagDraft } from "./SongTagEditor";
 
 type SurveyApi = ReturnType<typeof createApi>;
 type Props = { api: SurveyApi; participant?: Participant; credential?: StoredCredential; online: boolean };
@@ -16,6 +17,8 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [editing, setEditing] = useState<SurveyRecord>();
+  const [editSession, setEditSession] = useState(0);
+  const [tagDraft, setTagDraft] = useState<SongTagDraft>();
   const [recordDate, setRecordDate] = useState("");
   const [searchTitle, setSearchTitle] = useState("");
   const [candidates, setCandidates] = useState<CatalogCandidate[]>([]);
@@ -132,6 +135,8 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
   }
 
   function startEdit(record: SurveyRecord) {
+    setEditSession(value => value + 1);
+    setTagDraft(undefined);
     ++researchRequestId.current;
     setResearch(undefined); setResearchBusy(null); ++researchGeneration.current;
     setEditing(record);
@@ -144,6 +149,8 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
   }
 
   async function loadCandidates(record: SurveyRecord) {
+    setEditSession(value => value + 1);
+    setTagDraft(undefined);
     ++researchRequestId.current;
     if (!credential) return;
     setCandidateStatus("確認中…");
@@ -184,6 +191,10 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
         expected_revision: editing.revision,
         record_date: recordDate,
       };
+      if (tagDraft?.changes.length && tagDraft.version_id === selectedVersion) {
+        update.tag_version_id = tagDraft.version_id;
+        update.tag_changes = tagDraft.changes;
+      }
       const unchanged = selectedVersion === (editing.version_id ?? "") && (Boolean(selectedVersion) || searchTitle.trim() === (editing.unresolved_title ?? ""));
       if (!unchanged && selectedVersion) {
         update.version_id = selectedVersion;
@@ -275,6 +286,7 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
             {research?.tag_last_error && <p className="muted-note">タグ調査に確認が必要です。根拠が不足した場合はタグを付けずに結果を残します。</p>}
             {candidates.map((candidate) => <button type="button" className={`candidate-card${selectedVersion === candidate.id ? " candidate-selected" : ""}`} aria-pressed={selectedVersion === candidate.id} key={candidate.id} onClick={() => setSelectedVersion(candidate.id)}>{candidate.work_title} · {candidate.title}</button>)}
           </>
+          {credential && <SongTagEditor key={`${editing.id}:${editing.revision}:${editSession}`} api={api} record={editing} selectedVersion={selectedVersion} token={credential.device_secret} online={online} onDraftChange={setTagDraft} />}
           <div className="button-row"><button className="primary-button" type="submit" disabled={!online}>記録を保存</button><button type="button" className="quiet-button" onClick={() => setEditing(undefined)}>閉じる</button></div>
         </form>}
       </article>;

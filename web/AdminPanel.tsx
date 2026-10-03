@@ -98,7 +98,7 @@ function fieldsFor(table: EditableTable, refs: Partial<Record<EditableTable, Nam
       selectRef("tag_id", "タグ", "tags", (row) => row.name ?? row.id),
       { key: "evidence", label: "根拠", type: "textarea", required: true },
       selectRef("source_id", "情報源", "sources", (row) => row.title ?? row.id, false, true),
-      { key: "origin", label: "登録元", type: "select", required: true, options: [{ value: "admin", label: "管理者" }, { value: "research", label: "調査" }] },
+      { key: "origin", label: "登録元", type: "select", required: true, options: [{ value: "admin", label: "管理者" }, { value: "research", label: "調査" }, { value: "participant", label: "回答者の手動設定" }] },
       { key: "confirmed", label: "確認済み", type: "checkbox" },
     ];
     case "sources": return [

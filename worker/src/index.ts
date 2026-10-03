@@ -42,6 +42,7 @@ import {
 } from "./catalog";
 import { runResearchQueue } from "./research/runner";
 import { requestRecordResearch, recordResearchStatus } from "./record-research";
+import { songTagEditor } from "./manual-tags";
 import { activeTags } from "./tags";
 import { statistics, jstToday } from "./statistics";
 
@@ -339,6 +340,11 @@ async function route(request: Request, env: WorkerEnv): Promise<Response> {
     return ok(await recordResearchStatus(env, row));
   }
   const researchRequest = path.match(/^\/records\/([^/]+)\/research$/);
+  const tagEditor = path.match(/^\/records\/([^/]+)\/tags$/);
+  if (tagEditor && method === "GET") {
+    const actor = await ownerOrAdmin(request, env), row = await getRow(env.DB, "responses", tagEditor[1]);
+    ownRecord(actor, row); return ok(await songTagEditor(env, row));
+  }
   if (researchRequest && method === "POST") return requestRecordResearch(request, env, researchRequest[1]);
   const record = path.match(/^\/records(?:\/([^/]+))?$/);
   if (record && ["POST", "PATCH", "DELETE"].includes(method))

@@ -1,1 +1,8 @@
 @import url("./theme.css");
+.manual-tag-editor { margin: 16px 0; padding: 16px; border: 1px solid #cfdef2; border-radius: 14px; background: #fff; }
+.manual-tag-editor legend { padding: 0 6px; font-weight: 700; }
+.manual-tag-category h5 { margin: 12px 0 8px; font-size: 14px; }
+.manual-tag-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.manual-tag-editor .manual-tag-choice { display: flex; flex-direction: row; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid #dce6f2; border-radius: 9px; }
+.manual-tag-editor .manual-tag-choice input[type="checkbox"] { width: 18px; height: 18px; margin: 0; padding: 0; accent-color: #337fba; }
+.manual-tag-choice small { color: #57708a; }

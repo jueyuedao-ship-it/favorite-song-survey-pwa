@@ -78,7 +78,7 @@ export interface TagAssignment extends Row {
   tag_id: string;
   evidence: string;
   source_id: string | null;
-  origin: "admin" | "research";
+  origin: "admin" | "research" | "participant";
   confirmed: boolean;
   manual_lock: boolean;
 }
@@ -296,12 +296,24 @@ export interface RecordCreate extends Mutation {
   participant_id?: string;
 }
 export interface RecordUpdate extends RevisionMutation {
+  tag_version_id?: string;
+  tag_changes?: ManualTagChange[];
   version_id?: string | null;
   record_date?: string;
   unresolved_title?: string | null;
   artist_hint?: string | null;
   reference_url?: string | null;
   participant_id?: string;
+}
+export interface ManualTagChange {
+  tag_id: string;
+  confirmed: boolean;
+  assignment_id: string | null;
+  expected_revision: number | null;
+}
+export interface SongTagEditorData {
+  version_id: string;
+  tags: (Tag & { selected: boolean; assignment_id: string | null; assignment_revision: number | null; manual_lock: boolean; origin: TagAssignment["origin"] | null })[];
 }
 export interface CatalogCandidate extends Version {
   work_title: string;

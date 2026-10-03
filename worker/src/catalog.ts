@@ -1,6 +1,7 @@
 import { authenticate, owner } from "./auth";
 import { civilDate, jstToday } from "./statistics";
 import { queueTagResearch } from "./record-research";
+import { manualTagPlan } from "./manual-tags";
 import type {
   BusinessTable,
   EditableTable,
@@ -213,7 +214,7 @@ export function valuesFor(
       v.evidence = text(v.evidence, 4000);
       v.source_id = optionalText(v.source_id, 128);
       defaults("origin", "admin");
-      oneOf(v.origin, ["admin", "research"]);
+      oneOf(v.origin, ["admin", "research", "participant"]);
       defaults("confirmed", false);
       boolean(v.confirmed);
       break;
@@ -510,6 +511,8 @@ export async function recordMutation(
           "unresolved_title",
           "artist_hint",
           "reference_url",
+          "tag_version_id",
+          "tag_changes",
         ],
   );
   return replyMutation(env, actor, `${method}:${path}`, body, async () => {
@@ -603,11 +606,13 @@ export async function recordMutation(
       if (existing?.purpose === "candidate_lookup") changes.push({table:"research_jobs", before:existing,
         after:updated(existing,{response_revision:row.revision,...(existing.status === "running" ? {status:"queued",lease_until:null} : {})})});
     }
+    const tags = await manualTagPlan(env, actor, row, body);
     return {
       data: row,
       status: before ? 200 : 201,
       changes,
-      guards: referenceGuards(env.DB, "responses", row),
+      guards: [...referenceGuards(env.DB, "responses", row), ...(tags.guards ?? [])],
+      extra: tags.extra,
     };
   });
 }

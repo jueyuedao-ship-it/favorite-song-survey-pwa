@@ -36,6 +36,57 @@ beforeEach(async () => {
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
+it("reopening the same editor resets visible tag choices and their save draft together", async () => {
+  const fetcher=fixture(url=>{
+    if(url.pathname.endsWith('/tags'))return result({version_id:'v-old',tags:[{...rowBase,id:'tag-03',name:'ロック',category:'ジャンル',criterion:'ロック',active:true,selected:true,assignment_id:'a',assignment_revision:1,manual_lock:false,origin:'research'}]});
+    if(url.pathname.endsWith('/candidates'))return result({response_id:record.id,status:'complete',candidates:[],last_error:null});
+    if(url.pathname.endsWith('/records'))return result({items:[record],next_cursor:null});
+    if(url.pathname.endsWith('/catalog/versions/v-old'))return result(detail());
+    throw new Error('Unexpected route');
+  });
+  render(<HistoryPanel api={createApi(BASE,{fetch:fetcher})} participant={person} credential={identity} online />);
+  fireEvent.click(await screen.findByRole('button',{name:'編集'}));
+  fireEvent.click(await screen.findByRole('checkbox',{name:'ロック'}));expect(screen.getByRole('checkbox',{name:'ロック'})).not.toBeChecked();
+  fireEvent.click(screen.getByRole('button',{name:'編集'}));
+  await waitFor(()=>expect(screen.getByRole('checkbox',{name:'ロック'})).toBeChecked());
+});
+it("tag editor reloads its saved snapshot when switching back from an unresolved selection", async () => {
+  const fetcher=fixture(url=>{
+    if(url.pathname.endsWith('/tags'))return result({version_id:'v-old',tags:[{...rowBase,id:'tag-03',name:'ロック',category:'ジャンル',criterion:'ロック',active:true,selected:true,assignment_id:'a',assignment_revision:1,manual_lock:false,origin:'research'}]});
+    if(url.pathname.endsWith('/candidates'))return result({response_id:record.id,status:'complete',candidates:[],last_error:null});
+    if(url.pathname.endsWith('/records'))return result({items:[record],next_cursor:null});
+    if(url.pathname.endsWith('/catalog/versions/v-old'))return result(detail());
+    throw new Error('Unexpected route');
+  });
+  render(<HistoryPanel api={createApi(BASE,{fetch:fetcher})} participant={person} credential={identity} online />);
+  fireEvent.click(await screen.findByRole('button',{name:'編集'}));expect(await screen.findByRole('checkbox',{name:'ロック'})).toBeChecked();
+  fireEvent.click(screen.getByRole('button',{name:'未特定の曲名に切り替える'}));expect(screen.queryByRole('checkbox',{name:'ロック'})).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'現在の曲を保持'}));expect(await screen.findByRole('checkbox',{name:'ロック'})).toBeChecked();
+});
+it("tag checkboxes stay local until record save and send only additions/removals", async () => {
+  let saved:any; let saves=0;
+  const fetcher=fixture((url,init)=>{
+    if(url.pathname.endsWith('/tags'))return result({version_id:'v-old',tags:[
+      {...rowBase,id:'tag-03',name:'ロック',category:'ジャンル',criterion:'ロックの演奏',active:true,selected:true,assignment_id:'assignment-rock',assignment_revision:4,manual_lock:false,origin:'research'},
+      {...rowBase,id:'tag-14',name:'切ない',category:'雰囲気',criterion:'切ない曲調',active:true,selected:false,assignment_id:null,assignment_revision:null,manual_lock:false,origin:null}]});
+    if(url.pathname.endsWith('/records/r-a')&&init.method==='PATCH'){saved=JSON.parse(String(init.body));saves++;return result({...record,revision:2})}
+    if(url.pathname.endsWith('/candidates'))return result({response_id:record.id,status:'needs_review',candidates:[],last_error:null});
+    if(url.pathname.endsWith('/records'))return result({items:[record],next_cursor:null});
+    if(url.pathname.endsWith('/catalog/versions/v-old'))return result(detail());
+    throw new Error('Unexpected fixture route');
+  });
+  render(<HistoryPanel api={createApi(BASE,{fetch:fetcher})} participant={person} credential={identity} online />);
+  fireEvent.click(await screen.findByRole('button',{name:'編集'}));
+  fireEvent.click(await screen.findByRole('checkbox',{name:'ロック'}));fireEvent.click(screen.getByRole('checkbox',{name:'切ない'}));
+  expect(saves).toBe(0);fireEvent.click(screen.getByRole('button',{name:'閉じる'}));expect(saves).toBe(0);
+  fireEvent.click(screen.getByRole('button',{name:'編集'}));
+  expect(await screen.findByRole('checkbox',{name:'ロック'})).toBeChecked();
+  fireEvent.click(screen.getByRole('checkbox',{name:'ロック'}));fireEvent.click(screen.getByRole('checkbox',{name:'切ない'}));
+  fireEvent.click(screen.getByRole('button',{name:'記録を保存'}));
+  await waitFor(()=>expect(saves).toBe(1));
+  expect(saved.tag_version_id).toBe('v-old');
+  expect(saved.tag_changes).toEqual([{tag_id:'tag-03',confirmed:false,assignment_id:'assignment-rock',expected_revision:4},{tag_id:'tag-14',confirmed:true,assignment_id:null,expected_revision:null}]);
+});
 it("a delayed research start cannot populate a different record editor", async () => {
   let release!: (value: Response) => void;
   const delayed = new Promise<Response>(resolve => { release = resolve; });

@@ -257,6 +257,53 @@ afterAll(async () => {
 });
 
 describe("D1 HTTP capability and mutation integrity", () => {
+  it("owner manual tags are shared, audited, reversible and protected from stale editors", async () => {
+    await register("A",A);await register("B",B);
+    const song=await version(), rec=await record(A,song.id,"2026-09-30"); await record(B,song.id,"2026-09-30");
+    const path=`/records/${rec.data.id}`;
+    expect((await api(path+'/tags','GET',undefined,B)).status).toBe(403);
+    const editor=await api(path+'/tags','GET',undefined,A);expect(editor.status).toBe(200);
+    const tag=editor.data.tags.find((t:any)=>t.id==='tag-03');
+    const body={operation_id:op(),expected_revision:1,tag_version_id:song.id,tag_changes:[{tag_id:tag.id,confirmed:true,assignment_id:tag.assignment_id,expected_revision:tag.assignment_revision}]};
+    expect((await api(path,'PATCH',body,A)).status).toBe(200);
+    expect((await api(path,'PATCH',body,A)).status).toBe(200);
+    expect((await api('/catalog/versions/'+song.id)).data.tags.map((x:any)=>x.tag.name)).toContain('ロック');
+    const stats=(await api('/statistics?from=2026-09-28&to=2026-10-04&anchor=2026-09-30')).data;
+    expect(stats.weekly_tags.find((w:any)=>w.week_start==='2026-09-28').tags.find((t:any)=>t.tag_id==='tag-03').count).toBe(2);
+    const current=(await api(path+'/tags','GET',undefined,A)).data.tags.find((t:any)=>t.id==='tag-03');
+    const remove={operation_id:op(),expected_revision:2,tag_version_id:song.id,tag_changes:[{tag_id:tag.id,confirmed:false,assignment_id:current.assignment_id,expected_revision:current.assignment_revision}]};
+    expect((await api(path,'PATCH',remove,A)).status).toBe(200);
+    expect((await api('/catalog/versions/'+song.id)).data.tags).toHaveLength(0);
+    const assignments=(await api('/admin/data/tag_assignments','GET',undefined,admin)).data.items;
+    expect(assignments).toMatchObject([{tag_id:'tag-03',confirmed:false,manual_lock:true,origin:'participant',deleted_at:null}]);
+    expect((await api(path,'PATCH',{...body,operation_id:op(),expected_revision:3},A)).status).toBe(409);
+    const audit=(await api('/admin/audit?table=tag_assignments','GET',undefined,admin)).data.items;
+    expect(audit).toHaveLength(2);expect(audit.every((a:any)=>a.actor_type==='guest')).toBe(true);
+  });
+  it("manual tag conflicts and invalid tags roll back the answer date with the tag changes", async () => {
+    await register("A",A);const song=await version(),rec=await record(A,song.id,"2026-09-30");
+    const path=`/records/${rec.data.id}`, before=(await api('/admin/export','GET',undefined,admin)).data;
+    const response=await api(path,'PATCH',{operation_id:op(),expected_revision:1,record_date:'2026-09-29',tag_version_id:song.id,tag_changes:[{tag_id:'not-a-tag',confirmed:true,assignment_id:null,expected_revision:null}]},A);
+    expect(response.status).toBe(400);
+    expect((await api('/records')).data.items.find((r:any)=>r.id===rec.data.id)).toEqual(rec.data);
+    expect((await api('/admin/export','GET',undefined,admin)).data.high_watermark).toBe(before.high_watermark);
+  });
+  it("all dictionary tags can be saved in one bounded D1 transaction", async () => {
+    await register("A",A);const song=await version(),rec=await record(A,song.id,"2026-09-30");
+    const editor=await api(`/records/${rec.data.id}/tags`,'GET',undefined,A);expect(editor.status).toBe(200);
+    const changes=editor.data.tags.map((t:any)=>({tag_id:t.id,confirmed:true,assignment_id:t.assignment_id,expected_revision:t.assignment_revision}));
+    expect(changes).toHaveLength(50);
+    const bindings=(await mf.getBindings()) as unknown as WorkerEnv;
+    let queries=0;
+    const measured=new Proxy(db,{get(target,key){
+      if(key==='prepare')return(sql:string)=>{const wrap=(s:D1PreparedStatement):D1PreparedStatement=>new Proxy(s,{get(t,k){if(k==='bind')return(...v:any[])=>wrap(t.bind(...v));const f=Reflect.get(t,k);if(['first','all','run','raw'].includes(String(k)))return(...v:any[])=>{queries++;return f.apply(t,v)};return typeof f==='function'?f.bind(t):f}});return wrap(target.prepare(sql))};
+      if(key==='batch')return(s:D1PreparedStatement[])=>{queries+=s.length;return target.batch(s)};
+      const v=Reflect.get(target,key);return typeof v==='function'?v.bind(target):v;
+    }});
+    const response=await worker.fetch(new Request(`http://localhost/api/v1/records/${rec.data.id}`,{method:'PATCH',headers:{'content-type':'application/json',Authorization:'Bearer '+A},body:JSON.stringify({operation_id:op(),expected_revision:1,tag_version_id:song.id,tag_changes:changes})}),{...bindings,DB:measured},{} as ExecutionContext);
+    expect(response.status).toBe(200);expect(queries).toBeLessThanOrEqual(50);
+    expect((await api('/catalog/versions/'+song.id)).data.tags).toHaveLength(50);
+  });
   it("a new answer selecting a catalog candidate also queues incomplete tag research", async () => {
     await register("A",A);const song=await version();
     const job=(await api("/admin/jobs","GET",undefined,admin)).data.items.find((j:any)=>j.version_id===song.id);

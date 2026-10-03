@@ -36,6 +36,24 @@ beforeEach(async () => {
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
+it("a delayed tag save does not close the subsequently opened record editor", async () => {
+  let release!:(r:Response)=>void;const delayed=new Promise<Response>(resolve=>{release=resolve});
+  const other={...record,id:'r-b',version_id:'v-b'};
+  const fetcher=fixture((url,init)=>{
+    if(url.pathname.endsWith('/tags'))return result({version_id:url.pathname.includes('/r-b/')?'v-b':'v-old',tags:[{...rowBase,id:'tag-03',name:'ロック',category:'ジャンル',criterion:'ロック',active:true,selected:false,assignment_id:null,assignment_revision:null,manual_lock:false,origin:null}]});
+    if(url.pathname.endsWith('/records/r-a')&&init.method==='PATCH')return delayed;
+    if(url.pathname.endsWith('/candidates'))return result({response_id:record.id,status:'complete',candidates:[],last_error:null});
+    if(url.pathname.endsWith('/records'))return result({items:[record,other],next_cursor:null});
+    if(url.pathname.includes('/catalog/versions/'))return result({...detail(),version:{...detail().version,id:url.pathname.endsWith('v-b')?'v-b':'v-old'}});
+    throw new Error('Unexpected route');
+  });
+  render(<HistoryPanel api={createApi(BASE,{fetch:fetcher})} participant={person} credential={identity} online />);
+  const buttons=await screen.findAllByRole('button',{name:'編集'});
+  fireEvent.click(buttons[0]);fireEvent.click(await screen.findByRole('checkbox',{name:'ロック'}));
+  fireEvent.click(screen.getByRole('button',{name:'記録を保存'}));fireEvent.click(buttons[1]);
+  await act(async()=>release(result({...record,revision:2})));
+  expect(screen.getByText('記録を編集')).toBeInTheDocument();
+});
 it("reopening the same editor resets visible tag choices and their save draft together", async () => {
   const fetcher=fixture(url=>{
     if(url.pathname.endsWith('/tags'))return result({version_id:'v-old',tags:[{...rowBase,id:'tag-03',name:'ロック',category:'ジャンル',criterion:'ロック',active:true,selected:true,assignment_id:'a',assignment_revision:1,manual_lock:false,origin:'research'}]});

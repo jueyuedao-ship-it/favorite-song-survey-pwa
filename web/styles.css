@@ -1,4 +1,6 @@
 @import url("./theme.css");
+.edit-saving-controls { display: grid; gap: 13px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.history-editor .edit-saving-controls > label { max-width: 260px; }
 .manual-tag-editor { margin: 16px 0; padding: 16px; border: 1px solid #cfdef2; border-radius: 14px; background: #fff; }
 .manual-tag-editor legend { padding: 0 6px; font-weight: 700; }
 .manual-tag-category h5 { margin: 12px 0 8px; font-size: 14px; }

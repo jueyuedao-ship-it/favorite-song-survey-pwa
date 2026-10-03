@@ -18,6 +18,9 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
   const [notice, setNotice] = useState("");
   const [editing, setEditing] = useState<SurveyRecord>();
   const [editSession, setEditSession] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const editSessionRef = useRef(editSession);
+  editSessionRef.current = editSession;
   const [tagDraft, setTagDraft] = useState<SongTagDraft>();
   const [recordDate, setRecordDate] = useState("");
   const [searchTitle, setSearchTitle] = useState("");
@@ -182,8 +185,11 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
 
   async function saveEdit(event: React.FormEvent) {
     event.preventDefault();
-    if (!editing || !credential) return;
+    if (!editing || !credential || saving) return;
     if (!navigator.onLine) { setError("自分の記録の編集にはインターネット接続が必要です。"); return; }
+    const scope = editing, session = editSession;
+    const current = () => editingRef.current?.id === scope.id && editingRef.current?.revision === scope.revision && editSessionRef.current === session;
+    setSaving(true);
     setError("");
     try {
       const update: RecordUpdate = {
@@ -211,10 +217,12 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
       }
       const row = await api.patch<SurveyRecord>(`/records/${encodeURIComponent(editing.id)}`, update, credential.device_secret);
       setRecords((current) => current.map((item) => item.id === row.id ? row : item));
+      if (!current()) return;
       setEditing(undefined);
       setNotice(row.version_id && row.version_id !== editing.version_id ? "自分の記録を更新しました。選んだ版のタグ調査を開始・継続します。" : "自分の記録を更新しました。");
       void load();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "記録を更新できませんでした。"); }
+    } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : "記録を更新できませんでした。"); }
+    finally { setSaving(false); }
   }
 
   async function deleteRecord(record: SurveyRecord) {
@@ -267,6 +275,7 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
           {!record.version_id && <button type="button" className="text-button" disabled={!online} title={!online ? "接続後に利用できます" : undefined} onClick={() => void loadCandidates(record)}>候補を確認</button>}
         </div>}
         {own && editing?.id === record.id && <form className="editor-form history-editor" onSubmit={saveEdit}>
+          <fieldset className="edit-saving-controls" disabled={saving}>
           <h4>記録を編集</h4>
           <label>記録日<input type="date" value={recordDate} max={todayInJapan()} onChange={(event) => setRecordDate(event.target.value)} required /></label>
           <>
@@ -287,7 +296,8 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
             {candidates.map((candidate) => <button type="button" className={`candidate-card${selectedVersion === candidate.id ? " candidate-selected" : ""}`} aria-pressed={selectedVersion === candidate.id} key={candidate.id} onClick={() => setSelectedVersion(candidate.id)}>{candidate.work_title} · {candidate.title}</button>)}
           </>
           {credential && <SongTagEditor key={`${editing.id}:${editing.revision}:${editSession}`} api={api} record={editing} selectedVersion={selectedVersion} token={credential.device_secret} online={online} onDraftChange={setTagDraft} />}
-          <div className="button-row"><button className="primary-button" type="submit" disabled={!online}>記録を保存</button><button type="button" className="quiet-button" onClick={() => setEditing(undefined)}>閉じる</button></div>
+          <div className="button-row"><button className="primary-button" type="submit" disabled={!online}>{saving ? "保存中…" : "記録を保存"}</button><button type="button" className="quiet-button" onClick={() => setEditing(undefined)}>閉じる</button></div>
+          </fieldset>
         </form>}
       </article>;
     })}</div> : !loading && <p className="empty-state">この参加者の回答はまだありません。</p>}

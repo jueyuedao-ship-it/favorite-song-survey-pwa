@@ -1,0 +1,34 @@
+{
+  "query": {
+    "title": "蜃気楼",
+    "artist_hint": "tayori",
+    "reference_url": null
+  },
+  "evidence": [
+    {
+      "id": "s0",
+      "url": "https://www.youtube.com/watch?v=aLpQ5RX0quU",
+      "title": "tayori - 蜃気楼 (Official Video)",
+      "content": "{\"provider\":\"youtube_oembed\",\"endpoint\":\"https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DaLpQ5RX0quU&format=json\",\"title\":\"tayori - 蜃気楼 (Official Video)\",\"author_name\":\"tayori wmj\"}\n# tayori - Mirage (Official Video)\n## Channel: tayori (verified)\n### Description\nVocal: isui\nMusic, Lyrics & Arrangement: raku\n[Music Credit]\nOfficial Site: \nOfficial Fan Club \"quartet\": \nX:   / tayori_tri  \n蜃気楼 - Mirage Produced by tayori Vocal: isui Music, Lyrics & Arrangement: raku Bass: tazuneru [Movie Credit] Director: Shikisai (A4A Inc.)",
+      "metadata": {
+        "provider": "youtube_oembed",
+        "endpoint": "https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DaLpQ5RX0quU&format=json",
+        "title": "tayori - 蜃気楼 (Official Video)",
+        "author_name": "tayori wmj"
+      }
+    },
+    {
+      "id": "s1",
+      "url": "https://www.instagram.com/reel/DX9FwhUyPDt",
+      "title": "New Single「蜃気楼」with Lyrics Part 1 #tayori #tayori_蜃気楼",
+      "content": "Music / Lyric：you-to. Bass / Lead Guitar：渡辺壮亮 (嘘とカメレオン) Mix / Vocal Recording：Eugene Takino ... MV LINK：https://youtu.be/\nNew Single「蜃気楼」with Lyrics Part 1 #tayori #tayori_蜃気楼"
+    },
+    {
+      "id": "s2",
+      "url": "https://open.spotify.com/intl-ja/track/5vRVHWwXBPPcdtnrrQtzIo",
+      "title": "蜃気楼 ‑ 曲・歌詞：tayori",
+      "content": "United Kingdom\n   United States\n   Uruguay\n   Uzbekistan\n   Vanuatu\n   Venezuela, RB\n蜃気楼 ‑ 曲・歌詞：tayori\nあたらよ. 蜃気楼. シングル. 蜃気楼 · 蜃気楼. tayori. 3:32. © 2026 WARNER MUSIC JAPAN INC. ℗ Under exclusive license to WARNER MUSIC JAPAN INC, ℗ 2026 tayori."
+    }
+  ],
+  "raw_model": "{\"recordings\": []}"
+}

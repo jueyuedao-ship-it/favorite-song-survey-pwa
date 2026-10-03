@@ -605,6 +605,63 @@ export function supportedAnalysis(
     )
   )
     throw new ResearchError("UNSUPPORTED_EVIDENCE");
+  // A model's empty answer must not hide recordings independently identified by
+  // native metadata. With no supplied URL, require the artist hint in native
+  // title/author fields; description mentions alone cannot establish identity.
+  // Keep these as unclassified candidates: native metadata never proves roles,
+  // original/cover relationships or sound tags (except the exact uploader).
+  const nativeFallback =
+    !parsed.recordings.length && Boolean(query.artist_hint?.trim());
+  if (nativeFallback) {
+    const recovered: Recording[] = [];
+    for (const s of evidence) {
+      const m = s.metadata;
+      if (
+        !m ||
+        m.provider !== "youtube_oembed" ||
+        m.endpoint !== youtubeMetadataEndpoint(s.url) ||
+        !recordingTitleMatches(m.title, query.title) ||
+        !norm(`${m.title} ${m.author_name}`).includes(norm(query.artist_hint!))
+      )
+        continue;
+      const r: Recording = {
+        title: m.title,
+        reference_url: s.url,
+        kind: "other",
+        original: null,
+        source_id: s.id,
+        quote: m.title,
+        credits:
+          m.author_name.length >= 3
+            ? [
+                {
+                  name: m.author_name,
+                  kind: "channel",
+                  role: "uploader",
+                  source_id: s.id,
+                  quote: m.author_name,
+                  aliases: [],
+                },
+              ]
+            : [],
+        tags: [],
+      };
+      try {
+        validateAnalysis(
+          JSON.stringify({ recordings: [r] }),
+          evidence,
+          query,
+          tags,
+        );
+        if (!recovered.some((x) => x.reference_url === r.reference_url))
+          recovered.push(r);
+      } catch {
+        /* Retain only identities passing the ordinary evidence checks. */
+      }
+    }
+    if (recovered.length > 0 && recovered.length <= 2)
+      parsed.recordings = recovered;
+  }
   const identity = validateAnalysis(
     JSON.stringify({
       recordings: parsed.recordings.map((r: any) => ({
@@ -617,7 +674,9 @@ export function supportedAnalysis(
     query,
     tags,
   );
-  const warnings: string[] = [];
+  const warnings: string[] = nativeFallback
+    ? ["NATIVE_IDENTITY_WITHOUT_AI_METADATA"]
+    : [];
   const test = (r: Recording) =>
     validateAnalysis(
       JSON.stringify({ recordings: [r] }),

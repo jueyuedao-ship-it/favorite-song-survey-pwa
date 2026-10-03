@@ -37,6 +37,19 @@ beforeEach(async () => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
+it.each(["needs_review", "failed"])("owner sees stopped research instead of a waiting message: %s", async status => {
+  const unresolved = { ...record, version_id: null, unresolved_title: "蜃気楼", artist_hint: "tayori" };
+  const fetcher = fixture(url => {
+    if (url.pathname.endsWith("/candidates")) return result({ response_id: record.id, status, candidates: [], last_error: "NO_SUPPORTED_RECORDINGS" });
+    if (url.pathname.endsWith("/records")) return result({ items: [unresolved], next_cursor: null });
+    throw new Error("Unexpected fixture route");
+  });
+  render(<HistoryPanel api={createApi(BASE, { fetch: fetcher })} participant={person} credential={identity} online />);
+  fireEvent.click(await screen.findByRole("button", { name: "候補を確認" }));
+  expect(await screen.findByText(/調査が停止しています/)).toBeInTheDocument();
+  expect(screen.queryByText("候補はまだ見つかりません。")).not.toBeInTheDocument();
+});
+
 it("identified owner can select another catalog version and explicitly clear stale song hints", async () => {
   let saved: Record<string, unknown> | undefined;
   let bearer = "";

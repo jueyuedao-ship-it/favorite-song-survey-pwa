@@ -106,7 +106,10 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
     try {
       const data = await api.get<RecordCandidates>(`/records/${encodeURIComponent(record.id)}/candidates`, { token: credential.device_secret });
       setCandidates(data.candidates);
-      setCandidateStatus(data.candidates.length ? `${data.candidates.length}件の候補があります。` : "候補はまだ見つかりません。");
+      setCandidateStatus(data.candidates.length ? `${data.candidates.length}件の候補があります。`
+        : data.status === "needs_review" || data.status === "failed"
+          ? "調査が停止しています。待つだけでは再開しません。管理者に確認・再試行を依頼してください。"
+          : "候補はまだ見つかりません。");
       setEditing(record);
       setRecordDate(record.record_date);
       setSearchTitle(record.unresolved_title ?? "");

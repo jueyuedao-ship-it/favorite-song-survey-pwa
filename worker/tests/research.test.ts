@@ -183,6 +183,113 @@ afterAll(async () => {
   await mf.dispose();
   await closeTransport();
 });
+it("retains native Mirage candidates when real title-plus-artist inference repeatedly returns empty", async () => {
+  const fixture = JSON.parse(
+    await readFile("worker/tests/research-mirage-fixture.json", "utf8"),
+  );
+  const r = await answer(fixture.query.title);
+  const originalJob = (await allRows(db, "research_jobs"))[0];
+  await db
+    .prepare("UPDATE responses SET data=? WHERE id=?")
+    .bind(JSON.stringify({ ...r, artist_hint: "tayori" }), r.id)
+    .run();
+  await db
+    .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+    .bind(
+      JSON.stringify({
+        ...originalJob,
+        stage: "infer",
+        query: fixture.query,
+        evidence: fixture.evidence,
+      }),
+      originalJob.id,
+    )
+    .run();
+  const f = (async () =>
+    json({
+      choices: [{ message: { content: fixture.raw_model } }],
+    })) as typeof fetch;
+  await measuredLiveDrain(f);
+  const job = (await allRows(db, "research_jobs")).find(
+    (j) => j.response_id === r.id,
+  )!;
+  expect(job.stage).toBe("done");
+  expect(job.status).toBe("needs_review");
+  expect(job.candidates).toHaveLength(1);
+  expect(job.candidates[0]).toMatchObject({
+    reference_url: "https://www.youtube.com/watch?v=aLpQ5RX0quU",
+    kind: "other",
+  });
+  expect(job.candidates[0].title).toContain("蜃気楼");
+  expect((await allRows(db, "responses"))[0].version_id).toBeNull();
+  expect(await allRows(db, "tag_assignments")).toHaveLength(0);
+  expect(await allRows(db, "credits")).toMatchObject([
+    { role: "uploader", confirmed: true },
+  ]);
+  expect((await allRows(db, "entities"))[0].name).toBe("tayori wmj");
+  expect((await allRows(db, "research_results"))[0].raw_model).toBe(
+    fixture.raw_model,
+  );
+});
+
+it.each([
+  "no-artist",
+  "wrong-artist",
+  "wrong-native-title",
+  "wrong-endpoint",
+  "missing-metadata",
+  "wrong-url",
+])(
+  "does not recover empty inference from untrusted or unmatched native identity: %s",
+  async (mode) => {
+    const { supportedAnalysis } = await import("../src/research/providers");
+    const fixture = JSON.parse(
+      await readFile("worker/tests/research-mirage-fixture.json", "utf8"),
+    );
+    if (mode === "no-artist") fixture.query.artist_hint = null;
+    if (mode === "wrong-artist")
+      fixture.query.artist_hint = "unrelated performer";
+    if (mode === "wrong-native-title")
+      fixture.evidence[0].metadata.title = "tayori - Another Song";
+    if (mode === "wrong-endpoint")
+      fixture.evidence[0].metadata.endpoint = "https://example.com/oembed";
+    if (mode === "missing-metadata") delete fixture.evidence[0].metadata;
+    if (mode === "wrong-url")
+      fixture.query.reference_url =
+        "https://www.youtube.com/watch?v=abcdefghijk";
+    expect(() =>
+      supportedAnalysis(fixture.raw_model, fixture.evidence, fixture.query, []),
+    ).toThrow("NO_SUPPORTED_RECORDINGS");
+  },
+);
+
+it("keeps multiple matching native versions separate for owner selection after empty inference", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const fixture = JSON.parse(
+    await readFile("worker/tests/research-mirage-fixture.json", "utf8"),
+  );
+  const source = structuredClone(fixture.evidence[0]);
+  source.id = "second";
+  source.url = "https://www.youtube.com/watch?v=abcdefghijk";
+  source.metadata.endpoint =
+    "https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabcdefghijk&format=json";
+  source.metadata.title = "tayori - 蜃気楼 (Live)";
+  source.content = JSON.stringify(source.metadata);
+  const analysis = supportedAnalysis(
+    fixture.raw_model,
+    [fixture.evidence[0], source],
+    fixture.query,
+    [],
+  );
+  expect(analysis.recordings.map((r) => r.reference_url)).toEqual([
+    "https://www.youtube.com/watch?v=aLpQ5RX0quU",
+    "https://www.youtube.com/watch?v=abcdefghijk",
+  ]);
+  expect(
+    analysis.recordings.every((r) => r.kind === "other" && !r.original),
+  ).toBe(true);
+});
+
 it("resolves unknown title with recording-specific sources, credits, aliases and feed", async () => {
   const r = await answer();
   await drain();

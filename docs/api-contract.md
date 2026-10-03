@@ -25,14 +25,14 @@ Admin sessions expire after 8h. Admin password verifier secret format is `pbkdf2
 ## Public data and responses
 
 | Route                         | Body/query                                  | Data                                                          |
-| ----------------------------- | ------------------------------------------- | ------------------------------------------------------------- | ----- | ----------------------------------------- | -------- | ------------ |
+| ----------------------------- | ------------------------------------------- | ------------------------------------------------------------- |
 | GET `/participants`           | cursor/limit, optional `q`                  | `Page<Participant>`                                           |
 | GET `/catalog/search`         | `q` (title/entity/alias/URL), limit         | `Page<CatalogCandidate>`; equal titles never merge recordings |
 | GET `/catalog/versions/:id`   | none                                        | `SongDetail`                                                  |
 | GET `/records`                | participant_id, from, to, q, cursor/limit   | `Page<SurveyRecord>`; active only                             |
 | GET `/records/:id/candidates` | guest bearer for own row, or admin          | `RecordCandidates`                                            |
 | GET `/tags`                   | cursor/limit                                | `Page<Tag>`; active only                                      |
-| GET `/statistics`             | `participant_id`, `from`, `to`, `period=day | week                                                          | month | all`, `anchor=YYYY-MM-DD`, `group_by=work | version` | `Statistics` |
+| GET `/statistics`             | `participant_id`, `from`, `to`, `period` (day/week/month/all), `anchor=YYYY-MM-DD`, `group_by` (work/version) | `Statistics` |
 | POST `/records`               | `RecordCreate`, guest bearer                | `SurveyRecord`, 201                                           |
 | PATCH `/records/:id`          | `RecordUpdate`, guest bearer                | `SurveyRecord`, 200                                           |
 | DELETE `/records/:id`         | `RevisionMutation`, guest bearer            | tombstone `SurveyRecord`, 200                                 |
@@ -40,6 +40,10 @@ Admin sessions expire after 8h. Admin password verifier secret format is `pbkdf2
 For a not-yet-identified song, submit `version_id:null`, nonempty `unresolved_title`, optional `artist_hint/reference_url`. This atomically creates a durable lookup job with `response_id`, `version_id:null`, captured query and `candidates:[]`. Task 3 researches without merging recordings by title alone, attaches an unambiguous match using response revision checks, or publishes candidates and `needs_review`; owner reads `/records/:id/candidates` and confirms through PATCH version_id. Failures leave the response intact. Identified versions already exist in the catalog. Versions store original/cover/remix relationships through work_id and get one durable research job per version on creation. Unresolved responses stay in history; no ranking until resolution. Statistics default to current JST Monday–Sunday, work grouping. Counts are response counts; supporters unique participants; ties use competition ranks (1,1,3). Role breakdown separates vocalist/composer/release_name/uploader. The 12-week tag series ends in the anchor week; denominator includes all active records, including unresolved/unparsed; only confirmed active tags count. Multiple tag percentages can exceed 100 percent. Weeks start Monday.
 
 ## Administrator
+
+Role statistics count confirmed credits only; provisional attribution remains stored and public labels mark it 未確認. Response totals and weekly tag denominators still include every active response. Client statistics exposes from/to/anchor and count/percentage display without changing the default 12-week series. Administrator record q search joins participant names and work/version titles before pagination, including unresolved titles and retained master labels.
+
+The browser outbox retains its captured participant, device capability and operation ID. Deterministic per-record 4xx failures are persisted for explicit retry/resolution, while independent later valid entries continue. Transient transport/429/5xx stops bounded replay. Removal requires explicit confirmation; retries never silently rebind to the selected public name or invent a new operation ID. Browser persistence remains isolated by canonical API origin/path.
 
 All following routes require admin bearer.
 
@@ -96,7 +100,7 @@ Task 3 must use `store.mutate(env,{id:'research',type:'system'},scope,{operation
 
 ## Research execution (Task 3)
 
-The installed runner executes one durable stage per five-minute cron invocation: basic search, basic extraction, strict Groq inference, one catalog recording, one metadata claim, or response resolution. Jobs retain bounded source snapshots, validated analysis, stage and cursors; legacy jobs without a stage begin at search. A 90-second global lease prevents simultaneous provider calls. Expired leases and retryable HTTP failures have at most four attempts with bounded exponential backoff. 429 persists its cooldown and retains evidence, so retry resumes inference without spending search credits again. Admin retry restarts completed jobs and resumes unfinished stages. Keys missing means no calls and queued records remain intact.
+The installed runner executes one durable stage per one-minute cron invocation: basic search, basic extraction, strict Groq inference, one catalog recording, one metadata claim, or response resolution. PC mirror collection remains on its separate five-minute schedule. Jobs retain bounded source snapshots, validated analysis, stage and cursors; legacy jobs without a stage begin at search. A 90-second global lease prevents simultaneous provider calls. Expired leases and retryable HTTP failures have at most four attempts with bounded exponential backoff. 429 persists its cooldown and retains evidence, so retry resumes inference without spending search credits again. Admin retry restarts completed jobs and resumes unfinished stages. Keys missing means no calls and queued records remain intact.
 
 Tavily `/usage` is checked before every paid-credit operation: Researcher free account, at most 1000 plan credits, no paygo consumption, and available account/key quota are required. A null per-key limit means the account allowance applies. D1 atomically reserves conservative credits before calls against the monthly cap (initial 800; administrator can lower or explicitly set up to 1000). Basic search costs one reserved credit; at most three basic-extract URLs reserve one additional credit. Failed or crashed reservations are retained conservatively. No automatic paid plan or advanced depth is used. A separate audited usage row counts attempted Groq requests and safe last-error codes.
 

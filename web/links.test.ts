@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inviteLink, inviteSecretFromHash } from "./links";
+import { inviteLink, inviteSecretFromHash, inviteSecretFromLink } from "./links";
 
 describe("招待リンク", () => {
   it("招待能力をURLフラグメントに置き、クエリや履歴パスへ出さない", () => {
@@ -9,5 +9,8 @@ describe("招待リンク", () => {
     expect(url.search).toBe("");
     expect(inviteSecretFromHash(url.hash)).toBe("x".repeat(43));
     expect(inviteSecretFromHash("#anything=untrusted")).toBeUndefined();
+    expect(inviteSecretFromLink(link)).toBe("x".repeat(43));
+    expect(inviteSecretFromLink("not a url")).toBeUndefined();
+    expect(inviteSecretFromLink("https://survey.example/app/#invite=short")).toBeUndefined();
   });
 });

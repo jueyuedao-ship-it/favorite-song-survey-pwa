@@ -9,6 +9,15 @@ export function inviteSecretFromHash(hash: string): string | undefined {
   return match?.[1];
 }
 
+export function inviteSecretFromLink(link: string): string | undefined {
+  try {
+    const url = new URL(link.trim());
+    return inviteSecretFromHash(url.hash);
+  } catch {
+    return undefined;
+  }
+}
+
 export function clearInviteHash(): void {
   const url = new URL(globalThis.location.href);
   url.hash = "";

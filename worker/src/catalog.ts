@@ -550,6 +550,21 @@ export async function recordMutation(
         );
       }
     }
+    const dailyLimitGuards =
+      !row.deleted_at &&
+      (!before ||
+        before.participant_id !== row.participant_id ||
+        before.record_date !== row.record_date)
+        ? [
+            check(
+              env.DB,
+              "NOT EXISTS(SELECT 1 FROM responses WHERE id<>? AND json_extract(data,'$.participant_id')=? AND json_extract(data,'$.record_date')=? AND json_extract(data,'$.deleted_at') IS NULL)",
+              row.id,
+              row.participant_id,
+              row.record_date,
+            ),
+          ]
+        : [];
     changes.push({
       table: "responses",
       before,
@@ -611,7 +626,11 @@ export async function recordMutation(
       data: row,
       status: before ? 200 : 201,
       changes,
-      guards: [...referenceGuards(env.DB, "responses", row), ...(tags.guards ?? [])],
+      guards: [
+        ...referenceGuards(env.DB, "responses", row),
+        ...dailyLimitGuards,
+        ...(tags.guards ?? []),
+      ],
       extra: tags.extra,
     };
   });

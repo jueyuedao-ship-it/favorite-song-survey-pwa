@@ -21,6 +21,12 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
   const [candidates, setCandidates] = useState<CatalogCandidate[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<string>("");
   const [candidateStatus, setCandidateStatus] = useState("");
+  const [research, setResearch] = useState<RecordCandidates>();
+  const [researchBusy, setResearchBusy] = useState<"tags" | "candidates" | null>(null);
+  const researchGeneration = useRef(0);
+  const researchRequestId = useRef(0);
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
   const [songDetails, setSongDetails] = useState<Record<string, SongDetail>>({});
   const [loadingVersionIds, setLoadingVersionIds] = useState<Set<string>>(new Set());
   const [unavailableVersionIds, setUnavailableVersionIds] = useState<Set<string>>(new Set());
@@ -88,8 +94,46 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
     await load(undefined, false, signal);
   }, [load]);
   useVisibleRefresh(refresh);
+  const researchRecordId = editing?.id;
+  const researchRevision = editing?.revision;
+  const refreshResearch = useCallback(async (signal: AbortSignal) => {
+    if (!researchRecordId || !credential) return;
+    const generation = ++researchGeneration.current;
+    try {
+      const data = await api.get<RecordCandidates>(`/records/${encodeURIComponent(researchRecordId)}/candidates`, { token: credential.device_secret, signal });
+      if (signal.aborted || generation !== researchGeneration.current) return;
+      setResearch(data);
+      if (data.purpose === "candidate_lookup") setCandidates(data.candidates);
+    } catch (reason) { if (!signal.aborted && generation === researchGeneration.current) setError(reason instanceof Error ? reason.message : "調査状況を確認できませんでした。"); }
+  }, [api, credential, researchRecordId, researchRevision]);
+  useVisibleRefresh(refreshResearch, Boolean(researchRecordId && credential && online));
+
+  async function startResearch(kind: "tags" | "candidates") {
+    if (!editing || !credential || researchBusy || !online) return;
+    ++researchGeneration.current;
+    const requestId = ++researchRequestId.current;
+    const scope = editing;
+    const current = () => researchRequestId.current === requestId && editingRef.current?.id === scope.id && editingRef.current?.revision === scope.revision;
+    setResearchBusy(kind); setError("");
+    try {
+      const data = await api.post<RecordCandidates>(`/records/${encodeURIComponent(editing.id)}/research`, {
+        operation_id: newOperationId(), expected_revision: editing.revision, kind,
+        ...(kind === "candidates" ? { title: searchTitle.trim() } : {}),
+      }, credential.device_secret);
+      if (!current()) return;
+      setResearch(data);
+      if (kind === "candidates") { setCandidates(data.candidates); setCandidateStatus("Webで曲候補を調べています。結果はこの編集欄に反映されます。"); }
+      setNotice(kind === "tags" ? "タグ調査を予約しました。結果は順次反映されます。" : "曲候補の再検索を予約しました。保存済みの回答は保持しています。");
+    } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : "調査を開始できませんでした。"); }
+    finally { if (current()) setResearchBusy(null); }
+  }
+  function researchLabel(status?: RecordCandidates["status"] | null): string {
+    return status === "queued" || status === "running" ? "調査中" : status === "complete" ? "完了" : status === "needs_review" || status === "failed" ? "確認が必要" : "未開始";
+  }
 
   function startEdit(record: SurveyRecord) {
+    ++researchRequestId.current;
+    setResearch(undefined); setResearchBusy(null); ++researchGeneration.current;
     setEditing(record);
     setRecordDate(record.record_date);
     setSearchTitle(record.version_id ? songDetails[record.version_id]?.version.title ?? record.unresolved_title ?? "" : record.unresolved_title ?? "");
@@ -100,6 +144,7 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
   }
 
   async function loadCandidates(record: SurveyRecord) {
+    ++researchRequestId.current;
     if (!credential) return;
     setCandidateStatus("確認中…");
     setError("");
@@ -156,7 +201,7 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
       const row = await api.patch<SurveyRecord>(`/records/${encodeURIComponent(editing.id)}`, update, credential.device_secret);
       setRecords((current) => current.map((item) => item.id === row.id ? row : item));
       setEditing(undefined);
-      setNotice("自分の記録を更新しました。");
+      setNotice(row.version_id && row.version_id !== editing.version_id ? "自分の記録を更新しました。選んだ版のタグ調査を開始・継続します。" : "自分の記録を更新しました。");
       void load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "記録を更新できませんでした。"); }
   }
@@ -221,6 +266,13 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
             <label>曲名<input value={searchTitle} maxLength={240} onChange={(event) => { setSearchTitle(event.target.value); setSelectedVersion(""); setCandidates([]); }} required={!selectedVersion} /></label>
             <p className="muted-note">{selectedVersion ? "選択した版を保存します。" : "入力した曲名を未特定として保存します。"} 曲を変更すると以前の歌手補足・参照URLは解除されます。</p>
             <div className="button-row"><button type="button" className="secondary-button" onClick={() => void searchCatalog()}>候補を探す</button><span role="status">{candidateStatus}</span></div>
+            <div className="button-row">
+              <button type="button" className="secondary-button" disabled={!online || Boolean(researchBusy) || !editing.version_id || selectedVersion !== editing.version_id || research?.tag_status === "queued" || research?.tag_status === "running"} onClick={() => void startResearch("tags")}>タグ調査開始</button>
+              <button type="button" className="secondary-button" disabled={!online || Boolean(researchBusy) || !searchTitle.trim() || research?.lookup_status === "queued" || research?.lookup_status === "running"} onClick={() => void startResearch("candidates")}>曲候補を再検索</button>
+            </div>
+            <p className="muted-note">タグ調査は保存済みの曲の版が対象です。候補を選んで保存すると自動でも開始します。候補の再検索はWebで調べ直し、回答は選び直して保存するまで保持します。</p>
+            <p role="status">タグ調査：{researchLabel(research?.tag_status)} · 候補再検索：{researchLabel(research?.lookup_status)}</p>
+            {research?.tag_last_error && <p className="muted-note">タグ調査に確認が必要です。根拠が不足した場合はタグを付けずに結果を残します。</p>}
             {candidates.map((candidate) => <button type="button" className={`candidate-card${selectedVersion === candidate.id ? " candidate-selected" : ""}`} aria-pressed={selectedVersion === candidate.id} key={candidate.id} onClick={() => setSelectedVersion(candidate.id)}>{candidate.work_title} · {candidate.title}</button>)}
           </>
           <div className="button-row"><button className="primary-button" type="submit" disabled={!online}>記録を保存</button><button type="button" className="quiet-button" onClick={() => setEditing(undefined)}>閉じる</button></div>

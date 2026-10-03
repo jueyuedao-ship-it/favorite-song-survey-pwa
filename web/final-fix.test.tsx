@@ -36,6 +36,46 @@ beforeEach(async () => {
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
+it("a delayed research start cannot populate a different record editor", async () => {
+  let release!: (value: Response) => void;
+  const delayed = new Promise<Response>(resolve => { release = resolve; });
+  const other = {...record,id:"r-b",version_id:"v-b"};
+  const fetcher = fixture(url => {
+    if (url.pathname.endsWith("/research")) return delayed;
+    if (url.pathname.endsWith("/candidates")) return result({response_id:record.id,status:"needs_review",candidates:[],last_error:null,tag_status:"needs_review",lookup_status:null});
+    if (url.pathname.endsWith("/records")) return result({items:[record,other],next_cursor:null});
+    if (url.pathname.includes("/catalog/versions/")) return result({...detail(),version:{...detail().version,id:url.pathname.endsWith("v-b")?"v-b":"v-old"}});
+    throw new Error("Unexpected fixture route");
+  });
+  render(<HistoryPanel api={createApi(BASE,{fetch:fetcher})} participant={person} credential={identity} online />);
+  const buttons=await screen.findAllByRole("button",{name:"編集"});
+  fireEvent.click(buttons[0]); fireEvent.click(await screen.findByRole("button",{name:"曲候補を再検索"}));
+  fireEvent.click(buttons[1]);
+  await act(async()=>release(result({response_id:record.id,status:"complete",purpose:"candidate_lookup",candidates:[{...detail().version,id:"v-wrong",work_title:"wrong record candidate",credits:[]}],last_error:null})));
+  expect(screen.queryByText(/wrong record candidate/)).not.toBeInTheDocument();
+});
+it("saved recording editor starts separate tag and web candidate requests and retains the selected recording", async () => {
+  const requests: any[] = [];
+  const fetcher = fixture((url, init) => {
+    if (url.pathname.endsWith("/research")) {
+      const body = JSON.parse(String(init.body)); requests.push(body);
+      return result({ response_id: record.id, status: "queued", candidates: [], last_error: null, tag_status: body.kind === "tags" ? "queued" : "needs_review", lookup_status: body.kind === "candidates" ? "queued" : null });
+    }
+    if (url.pathname.endsWith("/candidates")) return result({ response_id: record.id, status: "needs_review", candidates: [], last_error: null, tag_status: "needs_review", lookup_status: null });
+    if (url.pathname.endsWith("/records")) return result({ items: [record], next_cursor: null });
+    if (url.pathname.endsWith("/catalog/versions/v-old")) return result(detail());
+    throw new Error("Unexpected fixture route");
+  });
+  render(<HistoryPanel api={createApi(BASE, { fetch: fetcher })} participant={person} credential={identity} online />);
+  fireEvent.click(await screen.findByRole("button", { name: "編集" }));
+  fireEvent.click(await screen.findByRole("button", { name: "タグ調査開始" }));
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(requests[0]).toMatchObject({ kind: "tags", expected_revision: 1 });
+  fireEvent.click(screen.getByRole("button", { name: "曲候補を再検索" }));
+  await waitFor(() => expect(requests).toHaveLength(2));
+  expect(requests[1]).toMatchObject({ kind: "candidates", expected_revision: 1 });
+  expect(screen.getByRole("button", { name: "現在の曲を保持" })).toHaveAttribute("aria-pressed", "true");
+});
 
 it.each(["needs_review", "failed"])("owner sees stopped research instead of a waiting message: %s", async status => {
   const unresolved = { ...record, version_id: null, unresolved_title: "蜃気楼", artist_hint: "tayori" };

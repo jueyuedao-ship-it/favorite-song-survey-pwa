@@ -257,6 +257,93 @@ afterAll(async () => {
 });
 
 describe("D1 HTTP capability and mutation integrity", () => {
+  it("a new answer selecting a catalog candidate also queues incomplete tag research", async () => {
+    await register("A",A);const song=await version();
+    const job=(await api("/admin/jobs","GET",undefined,admin)).data.items.find((j:any)=>j.version_id===song.id);
+    await db.prepare("UPDATE research_jobs SET data=json_set(data,'$.status','needs_review','$.stage','done') WHERE id=?").bind(job.id).run();
+    expect((await record(A,song.id,"2026-09-30")).status).toBe(201);
+    expect((await api("/admin/jobs","GET",undefined,admin)).data.items.find((j:any)=>j.id===job.id)).toMatchObject({status:"queued",purpose:"tag_enrichment",stage:"search"});
+  });
+  it("date-only editing preserves a manual lookup query different from the saved unresolved title", async () => {
+    await register("A", A); const rec=await record(A,null,"2026-09-30");
+    const initial=(await api("/admin/jobs","GET",undefined,admin)).data.items.find((j:any)=>j.response_id===rec.data.id);
+    await db.prepare("UPDATE research_jobs SET data=json_set(data,'$.status','needs_review') WHERE id=?").bind(initial.id).run();
+    expect((await api(`/records/${rec.data.id}/research`,"POST",{operation_id:op(),expected_revision:1,kind:"candidates",title:"Different search"},A)).status).toBe(200);
+    expect((await api(`/records/${rec.data.id}`,"PATCH",{operation_id:op(),expected_revision:1,record_date:"2026-09-29"},A)).status).toBe(200);
+    const job=(await api("/admin/jobs","GET",undefined,admin)).data.items.find((j:any)=>j.response_id===rec.data.id);
+    expect(job).toMatchObject({purpose:"candidate_lookup",response_revision:2,query:{title:"Different search"}});
+  });
+  it("manual candidate lookup tracks changed unresolved queries and survives date-only edits", async () => {
+    await register("A", A);
+    const rec = await record(A, null, "2026-09-30");
+    const original = (await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.response_id === rec.data.id);
+    await db.prepare("UPDATE research_jobs SET data=json_set(data,'$.status','needs_review') WHERE id=?").bind(original.id).run();
+    expect((await api(`/records/${rec.data.id}/research`, "POST", {operation_id:op(),expected_revision:1,kind:"candidates",title:"Unconfirmed tune"}, A)).status).toBe(200);
+    const changed = await api(`/records/${rec.data.id}`, "PATCH", {operation_id:op(),expected_revision:1,unresolved_title:"New tune"}, A);
+    expect(changed.status).toBe(200);
+    let lookup = (await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.id === original.id);
+    const { sourceQuery } = await import("../src/research/state");
+    expect(await sourceQuery({ DB: db } as WorkerEnv, lookup)).toMatchObject({title:"New tune"});
+    expect((await api(`/records/${rec.data.id}`, "PATCH", {operation_id:op(),expected_revision:2,record_date:"2026-09-29"}, A)).status).toBe(200);
+    lookup = (await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.id === original.id);
+    expect(await sourceQuery({ DB: db } as WorkerEnv, lookup)).toMatchObject({title:"New tune"});
+    expect(lookup).toMatchObject({stage:"search",status:"queued"});
+  });
+  it("candidate re-search prefers an active lookup over a historical tombstone", async () => {
+    await register("A", A); const song=await version(), rec=await record(A,null,"2026-09-30");
+    const initial=(await api("/admin/jobs","GET",undefined,admin)).data.items.find((j:any)=>j.response_id===rec.data.id);
+    await db.prepare("UPDATE research_jobs SET id='00000000-old',data=json_set(data,'$.id','00000000-old') WHERE id=?").bind(initial.id).run();
+    expect((await api(`/records/${rec.data.id}`,"PATCH",{operation_id:op(),expected_revision:1,version_id:song.id},A)).status).toBe(200);
+    expect((await api(`/records/${rec.data.id}`,"PATCH",{operation_id:op(),expected_revision:2,version_id:null,unresolved_title:"Other tune"},A)).status).toBe(200);
+    expect((await api(`/records/${rec.data.id}/research`,"POST",{operation_id:op(),expected_revision:3,kind:"candidates",title:"Other tune"},A)).status).toBe(200);
+    expect((await api("/admin/jobs","GET",undefined,admin)).data.items.filter((j:any)=>j.response_id===rec.data.id)).toHaveLength(1);
+  });
+  it("candidate confirmation atomically restarts incomplete shared tag research without date-edit duplicates", async () => {
+    await register("A", A);
+    const song = await version("Mirage"), unknown = await record(A, null, "2026-09-30");
+    const job = (await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.version_id === song.id);
+    await db.prepare("UPDATE research_jobs SET data=json_set(data,'$.status','needs_review','$.stage','done','$.descriptive_status','complete','$.raw_model','old','$.analysis',json('{}')) WHERE id=?").bind(job.id).run();
+    const body = { operation_id: op(), expected_revision: 1, version_id: song.id };
+    expect((await api(`/records/${unknown.data.id}`, "PATCH", body, A)).status).toBe(200);
+    const after = (await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.id === job.id);
+    expect(after).toMatchObject({ status: "queued", stage: "search", purpose: "tag_enrichment", candidates: [] });
+    expect(after.analysis).toBeUndefined(); expect(after.descriptive_status).toBeUndefined();
+    const replay = await api(`/records/${unknown.data.id}`, "PATCH", body, A);
+    expect(replay.status).toBe(200);
+    expect((await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.id === job.id).revision).toBe(after.revision);
+    expect((await api(`/records/${unknown.data.id}`, "PATCH", { operation_id: op(), expected_revision: 2, record_date: "2026-09-29" }, A)).status).toBe(200);
+    expect((await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.id === job.id).revision).toBe(after.revision);
+  });
+
+  it("manual research requests preserve resolved answers, reject other owners and coalesce active jobs", async () => {
+    await register("A", A); await register("B", B);
+    const song = await version("Mirage"), rec = await record(A, song.id, "2026-09-30");
+    const path = `/records/${rec.data.id}/research`;
+    expect((await api(path, "POST", { operation_id: op(), expected_revision: 1, kind: "candidates", title: "Mirage" }, B)).status).toBe(403);
+    const body = { operation_id: op(), expected_revision: 1, kind: "candidates", title: "Mirage" };
+    const started = await api(path, "POST", body, A);
+    expect(started.status).toBe(200);
+    expect(started.data).toMatchObject({ lookup_status: "queued", candidates: [] });
+    const jobs = (await api("/admin/jobs", "GET", undefined, admin)).data.items;
+    const lookup = jobs.find((j: any) => j.response_id === rec.data.id);
+    expect(lookup).toMatchObject({ purpose: "candidate_lookup", response_revision: 1, status: "queued" });
+    expect((await api(path, "POST", { ...body, operation_id: op() }, A)).status).toBe(200);
+    expect((await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.id === lookup.id).revision).toBe(lookup.revision);
+    expect((await api("/records")).data.items.find((r: any) => r.id === rec.data.id)).toEqual(rec.data);
+    expect((await api(path, "POST", { operation_id: op(), expected_revision: 1, kind: "tags" }, A)).status).toBe(200);
+    expect((await api(path, "POST", { operation_id: op(), expected_revision: 99, kind: "tags" }, A)).status).toBe(409);
+    expect((await api("/records")).data.items.find((r: any) => r.id === rec.data.id)).toEqual(rec.data);
+  });
+
+  it("unresolved answers cannot start tag research and confirmation retains completed shared research", async () => {
+    await register("A", A);
+    const song = await version(), rec = await record(A, null, "2026-09-30");
+    expect((await api(`/records/${rec.data.id}/research`, "POST", { operation_id: op(), expected_revision: 1, kind: "tags" }, A)).status).toBe(400);
+    const job = (await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.version_id === song.id);
+    await db.prepare("UPDATE research_jobs SET data=json_set(data,'$.status','complete','$.stage','done') WHERE id=?").bind(job.id).run();
+    expect((await api(`/records/${rec.data.id}`, "PATCH", { operation_id: op(), expected_revision: 1, version_id: song.id }, A)).status).toBe(200);
+    expect((await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.id === job.id).status).toBe("complete");
+  });
   it.each(["PATCH", "DELETE"] as const)(
     "replays identical %s after its winner commits between initial replay read and guarded build",
     async (method) => {

@@ -40,7 +40,7 @@ export async function publishCatalog(
       throw new ResearchError("RECORDING_MISMATCH");
   }
   let original: Version | undefined;
-  if (r.original) {
+  if (r.original && j.purpose !== "tag_enrichment") {
     original = (
       await rows<Version>(
         env.DB,
@@ -80,7 +80,11 @@ export async function publishCatalog(
     });
     if (w) changes.push({ table: "works", before: null, after: w });
     changes.push({ table: "versions", before: null, after: v });
-  } else if (!v.manual_lock) {
+  } else if (
+    !v.manual_lock &&
+    j.purpose !== "tag_enrichment" &&
+    j.purpose !== "candidate_lookup"
+  ) {
     const next = updated(v, {
       work_id: original?.work_id ?? v.work_id,
       title: r.title,
@@ -90,7 +94,12 @@ export async function publishCatalog(
     changes.push({ table: "versions", before: v, after: next });
     v = next;
   }
-  if (original && v.manual_lock && v.work_id !== original.work_id)
+  if (
+    original &&
+    v.manual_lock &&
+    v.work_id !== original.work_id &&
+    j.purpose !== "candidate_lookup"
+  )
     throw new ResearchError("MANUAL_LOCK_RELATIONSHIP");
   const candidate = {
     ...v,
@@ -107,7 +116,7 @@ export async function publishCatalog(
         v.id,
       )
     )[0];
-    if (!shared || shared.status !== "complete") {
+    if (!shared || !["queued", "running", "complete"].includes(shared.status)) {
       const values = {
         stage: "metadata" as const,
         evidence: j.evidence,
@@ -426,7 +435,7 @@ async function finish(env: WorkerEnv, j: ResearchJob) {
       .minItems === 1;
   const approvedIdentity =
     choices.length === 1 && (single || Boolean(suppliedIdentity));
-  if (approvedIdentity && j.response_id) {
+  if (approvedIdentity && j.response_id && j.purpose !== "candidate_lookup") {
     const r = await getRow(env.DB, "responses", j.response_id);
     changes.push({
       table: "responses",
@@ -442,7 +451,8 @@ async function finish(env: WorkerEnv, j: ResearchJob) {
         single && !j.analysis!.review_warnings?.length
           ? "complete"
           : "needs_review",
-      candidates: approvedIdentity ? [] : choices,
+      candidates:
+        approvedIdentity && j.purpose !== "candidate_lookup" ? [] : choices,
       last_error: j.analysis!.review_warnings?.length
         ? "UNCONFIRMED_CLAIMS"
         : single

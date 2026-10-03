@@ -1,5 +1,6 @@
 import { authenticate, owner } from "./auth";
 import { civilDate, jstToday } from "./statistics";
+import { queueTagResearch } from "./record-research";
 import type {
   BusinessTable,
   EditableTable,
@@ -552,6 +553,9 @@ export async function recordMutation(
       after: row,
       action: method === "DELETE" ? "delete" : before ? "update" : "create",
     });
+    if (row.version_id && !row.deleted_at && before?.version_id !== row.version_id) {
+      await queueTagResearch(env, await getRow(env.DB, "versions", row.version_id), changes, true, before ?? undefined);
+    }
     // Every unknown answer has a lookup job, even in an empty catalog.
     if (!row.version_id && !row.deleted_at) {
       const existing = (await allRows(env.DB, "research_jobs")).find(
@@ -562,7 +566,7 @@ export async function recordMutation(
         changes.push({ table: "research_jobs", before: null, after: job });
       } else if (
         before &&
-        JSON.stringify(existing.query) !==
+        JSON.stringify({ title: before.unresolved_title, artist_hint: before.artist_hint, reference_url: before.reference_url }) !==
           JSON.stringify({
             title: row.unresolved_title,
             artist_hint: row.artist_hint,
@@ -574,6 +578,7 @@ export async function recordMutation(
           before: existing,
           after: updated(existing, {
             stage: "search", evidence: [], analysis: undefined, metadata_cursor: 0, catalog_cursor:0,
+            purpose: undefined, response_revision: undefined,
             query: {
               title: row.unresolved_title!,
               artist_hint: row.artist_hint,
@@ -589,9 +594,14 @@ export async function recordMutation(
         });
       }
     }
-    if (row.version_id || row.deleted_at) {
+    if ((row.version_id && before?.version_id !== row.version_id) || row.deleted_at) {
       const existing = (await allRows(env.DB, "research_jobs")).find(j => j.response_id === row.id);
       if (existing) changes.push({table:"research_jobs", before:existing, after:updated(existing,{deleted_at:now(), status:"failed", last_error:"STALE_JOB", candidates:[], lease_until:null})});
+    }
+    if (before && !row.deleted_at && before.version_id === row.version_id && !changes.some(c => c.table === "research_jobs" && c.after.response_id === row.id)) {
+      const existing = (await allRows(env.DB, "research_jobs")).find(j => j.response_id === row.id);
+      if (existing?.purpose === "candidate_lookup") changes.push({table:"research_jobs", before:existing,
+        after:updated(existing,{response_revision:row.revision,...(existing.status === "running" ? {status:"queued",lease_until:null} : {})})});
     }
     return {
       data: row,

@@ -150,6 +150,8 @@ export interface ResearchAnalysis {
   review_warnings?: string[];
 }
 export interface ResearchJob extends Row {
+  purpose?: "tag_enrichment" | "candidate_lookup";
+  response_revision?: number;
   stage?:
     | "search"
     | "extract"
@@ -317,6 +319,10 @@ export interface RecordCandidates {
   status: ResearchStatus;
   candidates: CatalogCandidate[];
   last_error: string | null;
+  lookup_status?: ResearchStatus | null;
+  tag_status?: ResearchStatus | null;
+  tag_last_error?: string | null;
+  purpose?: ResearchJob["purpose"];
 }
 export interface Ranking {
   id: string;

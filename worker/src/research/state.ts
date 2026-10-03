@@ -277,6 +277,11 @@ export async function claim(env: WorkerEnv): Promise<ResearchJob | null> {
 export async function sourceQuery(env: WorkerEnv, job: ResearchJob) {
   if (job.response_id) {
     const r = await getRow(env.DB, "responses", job.response_id, false);
+    if (job.purpose === "candidate_lookup") {
+      if (r.deleted_at || r.revision !== job.response_revision || !job.query)
+        throw new ResearchError("STALE_JOB");
+      return job.query;
+    }
     if (
       r.deleted_at ||
       r.version_id ||
@@ -291,6 +296,14 @@ export async function sourceQuery(env: WorkerEnv, job: ResearchJob) {
     return job.query!;
   }
   const v = await getRow(env.DB, "versions", job.version_id!);
+  if (job.purpose === "tag_enrichment" && job.query) {
+    if (
+      catalogUrl(job.query.reference_url) !== catalogUrl(v.reference_url) ||
+      !recordingTitleMatches(v.title, job.query.title)
+    )
+      throw new ResearchError("STALE_JOB");
+    return job.query;
+  }
   return { title: v.title, artist_hint: null, reference_url: v.reference_url };
 }
 export async function cached(
@@ -302,7 +315,12 @@ export async function cached(
     artist_hint?: string | null;
   },
 ) {
-  if (!job.response_id || !q.reference_url) return false;
+  if (
+    !job.response_id ||
+    !q.reference_url ||
+    job.purpose === "candidate_lookup"
+  )
+    return false;
   const v = (
     await rows<Version>(
       env.DB,
@@ -333,15 +351,13 @@ export async function cached(
     await save(env, job, {
       status: "needs_review",
       last_error: "RECORDING_TITLE_CONFLICT",
-      evidence: native
-        .slice(0, 3)
-        .map((s, i) => ({
-          id: `s${i}`,
-          url: s.url,
-          title: s.title,
-          content: s.excerpt,
-          metadata: s.metadata,
-        })),
+      evidence: native.slice(0, 3).map((s, i) => ({
+        id: `s${i}`,
+        url: s.url,
+        title: s.title,
+        content: s.excerpt,
+        metadata: s.metadata,
+      })),
     });
     return true;
   }

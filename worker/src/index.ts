@@ -41,6 +41,7 @@ import {
   songDetail,
 } from "./catalog";
 import { runResearchQueue } from "./research/runner";
+import { requestRecordResearch, recordResearchStatus } from "./record-research";
 import { activeTags } from "./tags";
 import { statistics, jstToday } from "./statistics";
 
@@ -335,20 +336,10 @@ async function route(request: Request, env: WorkerEnv): Promise<Response> {
     const actor = await ownerOrAdmin(request, env),
       row = await getRow(env.DB, "responses", choices[1]);
     ownRecord(actor, row);
-    const job =
-      (await allRows(env.DB, "research_jobs")).find(
-        (j) => j.response_id === row.id,
-      ) ||
-      (await allRows(env.DB, "research_jobs")).find(
-        (j) => j.version_id === row.version_id && row.version_id !== null,
-      );
-    return ok({
-      response_id: row.id,
-      status: job?.status ?? "unconfirmed",
-      candidates: job?.candidates ?? [],
-      last_error: job?.last_error ?? null,
-    });
+    return ok(await recordResearchStatus(env, row));
   }
+  const researchRequest = path.match(/^\/records\/([^/]+)\/research$/);
+  if (researchRequest && method === "POST") return requestRecordResearch(request, env, researchRequest[1]);
   const record = path.match(/^\/records(?:\/([^/]+))?$/);
   if (record && ["POST", "PATCH", "DELETE"].includes(method))
     return recordMutation(request, env, path, false, record[1]);

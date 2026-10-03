@@ -294,8 +294,9 @@ export async function runResearchQueue(
           j.evidence!,
           q.reference_url ? catalogUrl(q.reference_url) : null,
         ) &&
-        (knownIdentitySchema(j.evidence!, q).properties.recordings as any)
-          .minItems === 1
+        (j.purpose === "tag_enrichment" ||
+          (knownIdentitySchema(j.evidence!, q).properties.recordings as any)
+            .minItems === 1)
       ) {
         await save(env, j, { stage: "describe_search" });
         return;
@@ -388,7 +389,10 @@ export async function runResearchQueue(
       const a = supportedAnalysis(rawModel!, j.evidence!, q, tags);
       if (j.descriptive_status === "unavailable")
         a.review_warnings!.push("DESCRIPTIVE_LOOKUP_UNAVAILABLE");
-      else if (j.descriptive_status && !a.recordings.some((r) => r.tags.length))
+      else if (
+        (j.descriptive_status || j.purpose === "tag_enrichment") &&
+        !a.recordings.some((r) => r.tags.length)
+      )
         a.review_warnings!.push("NO_SUPPORTED_TAG_DESCRIPTIONS");
       await save(env, j, {
         analysis: a,

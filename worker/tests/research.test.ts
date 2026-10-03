@@ -315,6 +315,108 @@ it("resolves unknown title with recording-specific sources, credits, aliases and
     ).results.length,
   ).toBeGreaterThanOrEqual(3);
 });
+it("manual candidate lookup publishes choices without replacing an already saved recording", async () => {
+  const r = await answer();
+  await drain();
+  const saved = (await allRows(db, "responses"))[0];
+  const old = (await allRows(db, "research_jobs")).find(
+    (j) => j.response_id === r.id,
+  )!;
+  await db
+    .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+    .bind(
+      JSON.stringify({
+        ...researchJob(null, saved),
+        id: old.id,
+        revision: old.revision,
+        purpose: "candidate_lookup",
+        response_revision: saved.revision,
+        query: { title: "Blue Song", artist_hint: null, reference_url: null },
+      }),
+      old.id,
+    )
+    .run();
+  await drain();
+  const lookup = (await allRows(db, "research_jobs")).find(
+    (j) => j.response_id === r.id,
+  )!;
+  expect(lookup.stage).toBe("done");
+  expect(lookup.candidates).toHaveLength(1);
+  expect((await allRows(db, "responses"))[0]).toEqual(saved);
+});
+it("candidate publication preserves a pending independent tag job", async () => {
+  const { publishCatalog } = await import("../src/research/publish");
+  const r = await answer();
+  await drain();
+  const saved = (await allRows(db, "responses"))[0];
+  const versionJob = (await allRows(db, "research_jobs")).find(
+    (j) => j.version_id === saved.version_id,
+  )!;
+  const pending = {
+    ...versionJob,
+    status: "queued" as const,
+    purpose: "tag_enrichment" as const,
+    stage: "search" as const,
+  };
+  await db
+    .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+    .bind(JSON.stringify(pending), pending.id)
+    .run();
+  const lookup = (await allRows(db, "research_jobs")).find(
+    (j) => j.response_id === r.id,
+  )!;
+  const restarted = {
+    ...lookup,
+    stage: "catalog" as const,
+    purpose: "candidate_lookup" as const,
+    catalog_cursor: 0,
+    candidates: [],
+  };
+  await db
+    .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+    .bind(JSON.stringify(restarted), lookup.id)
+    .run();
+  await publishCatalog(env(), restarted, model);
+  expect(
+    (await allRows(db, "research_jobs")).find((j) => j.id === pending.id),
+  ).toEqual(pending);
+});
+
+it("tag enrichment preserves the chosen recording identity and reports unsupported tags", async () => {
+  const r = await answer();
+  await drain();
+  const v = (await allRows(db, "versions"))[0];
+  const old = (await allRows(db, "research_jobs")).find(
+    (j) => j.version_id === v.id,
+  )!;
+  await db
+    .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+    .bind(
+      JSON.stringify({
+        ...old,
+        purpose: "tag_enrichment",
+        query: { title: "Blue Song", artist_hint: null, reference_url: url },
+        stage: "infer",
+        status: "queued",
+        candidates: [],
+        catalog_cursor: 0,
+        metadata_cursor: 0,
+      }),
+      old.id,
+    )
+    .run();
+  model.recordings[0].title = "Blue Song official";
+  model.recordings[0].tags = [];
+  await drain();
+  expect((await allRows(db, "versions"))[0].title).toBe("Blue Song");
+  const job = (await allRows(db, "research_jobs")).find(
+    (j) => j.id === old.id,
+  )!;
+  expect(job.status).toBe("needs_review");
+  expect(job.analysis?.review_warnings).toContain(
+    "NO_SUPPORTED_TAG_DESCRIPTIONS",
+  );
+});
 it.each([
   "not json",
   "unlisted tag",

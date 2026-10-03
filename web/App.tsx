@@ -3,7 +3,7 @@ import type { Participant, RecordCreate } from "../shared/contracts";
 import { AdminPanel } from "./AdminPanel";
 import { AnswerPanel } from "./AnswerPanel";
 import { createApi, ApiError } from "./api";
-import { clearInviteHash, inviteLink, inviteSecretFromHash } from "./links";
+import { inviteLink, inviteSecretFromLink } from "./links";
 import { formatJapaneseDateTime } from "./dates";
 import { HistoryPanel } from "./HistoryPanel";
 import { InviteShare } from "./InviteShare";
@@ -183,14 +183,7 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
         setPendingRecords(outbox);
         setOutboxBusy(navigator.onLine);
         setBooted(true);
-        let pending = savedRegistration;
-        const inviteSecret = inviteSecretFromHash(globalThis.location.hash);
-        if (!pending && inviteSecret) {
-          const request: GuestClaim = { operation_id: newOperationId(), invite_secret: inviteSecret, device_label: "この端末", device_secret: createSecret() };
-          pending = { kind: "claim", request };
-          await savePendingRegistration(apiBase, pending);
-          clearInviteHash();
-        }
+        const pending = savedRegistration;
         setPendingRegistration(pending ?? null);
         if (pending && navigator.onLine) void completeRegistration(pending).catch(() => undefined);
       } catch (reason) {
@@ -272,6 +265,33 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
       setNotice("登録情報を端末内に保存しました。接続すると同じ登録内容を再送します。");
       return;
     }
+    await completeRegistration(pending);
+  }
+
+  async function claimInvite(inviteUrl: string) {
+    const inviteSecret = inviteSecretFromLink(inviteUrl);
+    if (!inviteSecret) throw new Error("招待リンクの形式が正しくありません。");
+    if (!navigator.onLine) throw new Error("アカウントログインにはインターネット接続が必要です。");
+
+    const existing = await getPendingRegistration(apiBase);
+    if (existing) {
+      setPendingRegistration(existing);
+      if (existing.kind !== "claim") throw new Error("新しい参加登録を先に完了してください。");
+      await completeRegistration(existing);
+      return;
+    }
+
+    const pending: PendingRegistration = {
+      kind: "claim",
+      request: {
+        operation_id: newOperationId(),
+        invite_secret: inviteSecret,
+        device_label: "この端末",
+        device_secret: createSecret(),
+      } satisfies GuestClaim,
+    };
+    await savePendingRegistration(apiBase, pending);
+    setPendingRegistration(pending);
     await completeRegistration(pending);
   }
 
@@ -384,7 +404,7 @@ export function App({ apiBase = defaultApiBase(), fetcher }: AppProps) {
       void removeFromOutbox(apiBase, operation).then(() => refreshOutbox()).catch(() => setError("端末内の送信待ちを削除できませんでした。"));
     }} />
 
-    {view === "answer" && <AnswerPanel api={api} selectedParticipant={currentParticipant} credential={credential} pendingCount={pendingCount} online={online} pendingRegistration={pendingRegistration ?? undefined} onRetryRegistration={retryRegistration} onCreateGuest={createGuest} onSubmit={submitRecord} onAddDevice={addDevice} />}
+    {view === "answer" && <AnswerPanel api={api} selectedParticipant={currentParticipant} credential={credential} pendingCount={pendingCount} online={online} pendingRegistration={pendingRegistration ?? undefined} onRetryRegistration={retryRegistration} onClaimInvite={claimInvite} onCreateGuest={createGuest} onSubmit={submitRecord} onAddDevice={addDevice} />}
     {view === "rankings" && <StatisticsPanel api={api} mode="rankings" />}
     {view === "history" && <HistoryPanel api={api} participant={currentParticipant} credential={credential} online={online} />}
     {view === "personal" && <StatisticsPanel api={api} mode="personal" participantId={selectedParticipantId || undefined} />}

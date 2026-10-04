@@ -8,3 +8,81 @@
 .manual-tag-editor .manual-tag-choice { display: flex; flex-direction: row; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid #dce6f2; border-radius: 9px; }
 .manual-tag-editor .manual-tag-choice input[type="checkbox"] { width: 18px; height: 18px; margin: 0; padding: 0; accent-color: #337fba; }
 .manual-tag-choice small { color: #57708a; }
+
+
+/* Tagging reliability: three-state overrides, coverage and evidence provenance. */
+.manual-tag-editor .manual-tag-choice-three-state {
+  display: grid;
+  grid-template-columns: minmax(7rem, 1fr) auto;
+  align-items: center;
+  min-width: min(100%, 260px);
+}
+.manual-tag-choice-three-state > span { font-weight: 700; }
+.manual-tag-choice-three-state > small { grid-column: 1; }
+.manual-tag-choice-three-state > select {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-width: 6.5rem;
+  margin: 0;
+}
+.tag-evidence-panel {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--line, #dce6f2);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface, #fff) 94%, #4b89c8 6%);
+}
+.tag-coverage-row, .coverage-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.coverage-pill {
+  padding: 4px 8px;
+  border: 1px solid #cbd8e8;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.coverage-complete { border-color: #8bc7a7; }
+.coverage-unavailable { border-color: #d8b878; }
+.coverage-unknown { border-color: #b9c0ca; }
+.tag-evidence-list { display: grid; gap: 8px; margin-top: 10px; }
+.tag-evidence-item {
+  border: 1px solid #dce6f2;
+  border-radius: 9px;
+  padding: 8px 10px;
+}
+.tag-evidence-item summary {
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+.tag-evidence-item p { margin: 8px 0 0; white-space: pre-wrap; }
+.tag-source-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  color: var(--muted-text, #57708a);
+  font-size: 12px;
+}
+.coverage-summary { margin-top: 14px; }
+.coverage-card {
+  display: grid;
+  gap: 3px;
+  min-width: 180px;
+  padding: 10px 12px;
+  border: 1px solid #dce6f2;
+  border-radius: 10px;
+}
+@media (max-width: 620px) {
+  .manual-tag-editor .manual-tag-choice-three-state {
+    grid-template-columns: 1fr;
+  }
+  .manual-tag-choice-three-state > select {
+    grid-column: 1;
+    grid-row: auto;
+    width: 100%;
+  }
+}

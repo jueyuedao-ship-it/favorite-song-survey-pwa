@@ -1917,12 +1917,14 @@ function policyNegativeSignal(tag: TagDefinition) {
 }
 
 function policyContextSatisfied(tag: TagDefinition, text: string) {
+  const signal = policySignal(tag);
   return (tag.evidence_policy?.required_context ?? []).every((context) => {
-    if (context === "genre") return descriptorSearchGroups[0].cues.test(text);
-    if (context === "mood" || context === "energy" || context === "tempo")
-      return descriptorSearchGroups[1].cues.test(text);
-    if (context === "voice") return descriptorSearchGroups[2].cues.test(text);
-    if (context === "lyrics") return descriptorSearchGroups[3].cues.test(text);
+    if (context === "genre" || context === "tempo" || context === "lyrics")
+      return Boolean(signal?.test(text));
+    if (context === "mood" || context === "energy")
+      return signal ? hasSongPropertyContext(text, signal) : false;
+    if (context === "voice")
+      return descriptorSearchGroups[2].cues.test(text);
     return true;
   });
 }

@@ -109,7 +109,7 @@ export function StatisticsPanel({ api, participantId, mode }: Props) {
           <h3>タグ調査のcoverage</h3>
           <div className="coverage-grid">
             {(Object.keys(coverageNames) as TagCoverageGroup[]).map((group) => {
-              const item = statistics.coverage[group];
+              const item = statistics.coverage![group];
               return (
                 <div className="coverage-card" key={group}>
                   <strong>{coverageNames[group]}</strong>

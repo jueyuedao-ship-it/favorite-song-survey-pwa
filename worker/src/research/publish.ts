@@ -3,6 +3,7 @@ import type {
   ResearchJob,
   CatalogCandidate,
   Version,
+  TagAssignment,
 } from "../../../shared/contracts";
 import { newRow, updated, getRow, now, type Change } from "../store";
 import { researchJob } from "../catalog";
@@ -13,6 +14,7 @@ import {
   knownIdentitySchema,
   norm,
   type Analysis,
+  researchSourceQuality,
 } from "./providers";
 import { rows, save } from "./state";
 /** Publish one recording per invocation, creating its independent metadata job. */
@@ -223,6 +225,7 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
           e.url,
         )
       ).find((x) => x.excerpt === e.content);
+      const quality = researchSourceQuality(e);
       if (!existing)
         changes.push({
           table: "sources",
@@ -233,8 +236,22 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
             title: e.title,
             excerpt: e.content,
             ...(e.metadata ? { metadata: e.metadata } : {}),
+            quality_tier: quality.tier,
+            quality_reason: quality.reason,
             checked_at: now(),
             origin: "research",
+          }),
+        });
+      else if (
+        existing.quality_tier !== quality.tier ||
+        existing.quality_reason !== quality.reason
+      )
+        changes.push({
+          table: "sources",
+          before: existing,
+          after: updated(existing, {
+            quality_tier: quality.tier,
+            quality_reason: quality.reason,
           }),
         });
     }
@@ -377,24 +394,45 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
           t.tag_id,
         )
       )[0];
-      if (!existing?.manual_lock) {
-        const values = {
-          version_id: version.id,
-          tag_id: t.tag_id,
-          evidence: `AI判定（${
-            t.evidence_type === "direct" ? "直接記述" : "意味上の推論"
-          }）: ${t.reasoning}\n引用: ${t.quote}`,
-          source_id: source.id,
-          origin: "research",
-          confirmed: true,
-          manual_lock: false,
-        };
-        changes.push({
-          table: "tag_assignments",
-          before: existing ?? null,
-          after: existing ? updated(existing, values) : newRow(values),
-        });
-      }
+      const manualOverride =
+        existing?.manual_override === "force_on" ||
+        existing?.manual_override === "force_off"
+          ? existing.manual_override
+          : existing?.manual_lock
+            ? existing.confirmed
+              ? "force_on"
+              : "force_off"
+            : null;
+      const automaticEvidence = `AI判定（${
+        t.evidence_type === "direct" ? "直接記述" : "意味上の推論"
+      }）: ${t.reasoning}\n引用: ${t.quote}`;
+      const effectiveConfirmed =
+        manualOverride === "force_on"
+          ? true
+          : manualOverride === "force_off"
+            ? false
+            : true;
+      const values = {
+        version_id: version.id,
+        tag_id: t.tag_id,
+        auto_confirmed: true,
+        manual_override: manualOverride,
+        automatic_evidence: automaticEvidence,
+        automatic_source_id: source.id,
+        automatic_evidence_type: t.evidence_type ?? null,
+        dictionary_version: j.dictionary_version,
+        research_result_id: existing?.research_result_id ?? null,
+        evidence: manualOverride ? existing?.evidence ?? automaticEvidence : automaticEvidence,
+        source_id: manualOverride ? existing?.source_id ?? null : source.id,
+        origin: manualOverride ? existing?.origin ?? "research" : "research",
+        confirmed: effectiveConfirmed,
+        manual_lock: Boolean(manualOverride),
+      };
+      changes.push({
+        table: "tag_assignments",
+        before: existing ?? null,
+        after: existing ? updated(existing, values) : newRow(values),
+      });
     }
   }
   if (task.type === "finish") {
@@ -413,8 +451,82 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
       payload: task.r,
       raw_model: a.raw_model,
       review_warnings: a.review_warnings ?? [],
+      descriptive_coverage: j.descriptive_coverage,
     });
     changes.push({ table: "research_results", before: null, after: result });
+
+    const acceptedTagIds = new Set(task.r.tags.map((tag) => tag.tag_id));
+    const assignments = await rows<TagAssignment>(
+      env.DB,
+      "tag_assignments",
+      "json_extract(data,'$.version_id')=?",
+      version.id,
+    );
+    for (const assignment of assignments) {
+      const manualOverride =
+        assignment.manual_override === "force_on" ||
+        assignment.manual_override === "force_off"
+          ? assignment.manual_override
+          : assignment.manual_lock
+            ? assignment.confirmed
+              ? "force_on"
+              : "force_off"
+            : null;
+      const legacyAutomatic =
+        assignment.origin === "research" && !assignment.manual_lock;
+      const trackedAutomatic =
+        typeof assignment.auto_confirmed === "boolean" || legacyAutomatic;
+      const currentAuto =
+        typeof assignment.auto_confirmed === "boolean"
+          ? assignment.auto_confirmed
+          : legacyAutomatic
+            ? assignment.confirmed
+            : false;
+      const accepted = acceptedTagIds.has(assignment.tag_id);
+      if (!trackedAutomatic && !accepted) continue;
+      const nextAuto = accepted ? true : false;
+      const nextConfirmed =
+        manualOverride === "force_on"
+          ? true
+          : manualOverride === "force_off"
+            ? false
+            : nextAuto;
+      const automaticEvidence =
+        assignment.automatic_evidence ??
+        (legacyAutomatic ? assignment.evidence : null);
+      const automaticSourceId =
+        assignment.automatic_source_id ??
+        (legacyAutomatic ? assignment.source_id : null);
+      const next = updated(assignment, {
+        auto_confirmed: nextAuto,
+        manual_override: manualOverride,
+        manual_lock: Boolean(manualOverride),
+        confirmed: nextConfirmed,
+        dictionary_version: j.dictionary_version,
+        research_result_id: result.id,
+        automatic_evidence: automaticEvidence,
+        automatic_source_id: automaticSourceId,
+        evidence:
+          manualOverride
+            ? assignment.evidence
+            : accepted
+              ? automaticEvidence ?? assignment.evidence
+              : "自動調査：現在の辞書と取得済み根拠では非該当",
+        source_id:
+          manualOverride
+            ? assignment.source_id
+            : accepted
+              ? automaticSourceId
+              : null,
+        origin: manualOverride ? assignment.origin : "research",
+      });
+      if (JSON.stringify(next) !== JSON.stringify(assignment))
+        changes.push({
+          table: "tag_assignments",
+          before: assignment,
+          after: next,
+        });
+    }
     if (!version.manual_lock)
       changes.push({
         table: "versions",

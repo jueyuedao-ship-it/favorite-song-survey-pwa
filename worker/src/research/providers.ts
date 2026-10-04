@@ -1481,13 +1481,14 @@ export function fitInferenceRequest(body: any, evidence: Evidence[]) {
   while (sources.length > 1 && lowValueIndex() >= 0)
     sources.splice(lowValueIndex(), 1);
   const compactCriterion = (tag: (typeof tagDefinitions)[number]) => {
+    const { evidence_policy: _policy, ...modelTag } = tag;
     const generic = `Webの説明・公式情報で「${tag.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
     return tag.criterion === generic
       ? {
-          ...tag,
+          ...modelTag,
           criterion: `${tag.name}についてWebで具体的な根拠を確認。曲名や作者名から推測しない。`,
         }
-      : tag;
+      : modelTag;
   };
   const compactGuidance: Record<string, string> = {
     ジャンル:

@@ -1706,7 +1706,7 @@ export function validateAnalysis(
     reference_url: string | null;
     artist_hint?: string | null;
   },
-  tags: { id: string; name: string; category?: string; criterion?: string }[],
+  tags: TagDefinition[],
 ): Analysis {
   let value: any;
   try {

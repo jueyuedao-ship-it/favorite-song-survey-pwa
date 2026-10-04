@@ -1,5 +1,14 @@
 import { it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { inferenceSystemPrompt } from "../src/research/runner";
+
+const policySql = readFileSync("worker/schema/0005_tagging_reliability.sql", "utf8");
+const builtInPolicies = new Map<string, any>();
+for (const line of policySql.split(/\r?\n/)) {
+  const match = line.match(/json\('(.+)'\), '\$\.revision'.*WHERE id='(tag-\d+)'/);
+  if (match) builtInPolicies.set(match[2], JSON.parse(match[1].replace(/''/g, "'")));
+}
+const policyFor = (id: string) => builtInPolicies.get(id);
 
 const recordingUrl = "https://www.youtube.com/watch?v=aLpQ5RX0quU";
 const query = {
@@ -283,13 +292,20 @@ it("keeps supported identity and descriptor tags when optional original and synt
     { [articleUrl]: rawArticle },
   );
   const tags = [
-    { id: "tag-07", name: "エレクトロ", category: "ジャンル", criterion: "電子音やシンセ主体のサウンド。" },
-    { id: "tag-13", name: "明るい", category: "雰囲気", criterion: "明るく前向きな曲調。" },
-    { id: "tag-24", name: "軽快", category: "勢い", criterion: "軽やかで弾むリズム。" },
-    { id: "tag-32", name: "速い", category: "テンポ感", criterion: "速いテンポと説明される。" },
-    { id: "tag-33", name: "人の歌声", category: "歌声の構成", criterion: "人または人のグループによる歌唱の明示。" },
-    { id: "tag-38", name: "透明感", category: "歌声の印象", criterion: "澄んだ透明な歌声の具体的な説明。" },
-    { id: "tag-47", name: "希望", category: "歌詞テーマ", criterion: "歌詞が希望を主題とするという解説。" },
+    { id: "tag-07",
+      evidence_policy: policyFor("tag-07"), name: "エレクトロ", category: "ジャンル", criterion: "電子音やシンセ主体のサウンド。" },
+    { id: "tag-13",
+      evidence_policy: policyFor("tag-13"), name: "明るい", category: "雰囲気", criterion: "明るく前向きな曲調。" },
+    { id: "tag-24",
+      evidence_policy: policyFor("tag-24"), name: "軽快", category: "勢い", criterion: "軽やかで弾むリズム。" },
+    { id: "tag-32",
+      evidence_policy: policyFor("tag-32"), name: "速い", category: "テンポ感", criterion: "速いテンポと説明される。" },
+    { id: "tag-33",
+      evidence_policy: policyFor("tag-33"), name: "人の歌声", category: "歌声の構成", criterion: "人または人のグループによる歌唱の明示。" },
+    { id: "tag-38",
+      evidence_policy: policyFor("tag-38"), name: "透明感", category: "歌声の印象", criterion: "澄んだ透明な歌声の具体的な説明。" },
+    { id: "tag-47",
+      evidence_policy: policyFor("tag-47"), name: "希望", category: "歌詞テーマ", criterion: "歌詞が希望を主題とするという解説。" },
   ];
   const raw = {
     recordings: [
@@ -318,42 +334,49 @@ it("keeps supported identity and descriptor tags when optional original and synt
         tags: [
           {
             tag_id: "tag-07",
+      evidence_policy: policyFor("tag-07"),
             source_id: "s2",
             quote: "エレクトロニックなサウンド",
             reasoning: "The description explicitly identifies electronic sound in the recording.",
           },
           {
             tag_id: "tag-13",
+      evidence_policy: policyFor("tag-13"),
             source_id: "s2",
             quote: "軽やかで明るいサウンド",
             reasoning: "The source describes a light and bright mood, directly supporting the bright atmosphere tag.",
           },
           {
             tag_id: "tag-24",
+      evidence_policy: policyFor("tag-24"),
             source_id: "s2",
             quote: "軽やかで明るいサウンド",
             reasoning: "The description of the sound as light directly supports the light energy tag.",
           },
           {
             tag_id: "tag-32",
+      evidence_policy: policyFor("tag-32"),
             source_id: "s2",
             quote: "開放感あふれるアップテンポナンバー",
             reasoning: "The description explicitly calls the number up-tempo.",
           },
           {
             tag_id: "tag-33",
+      evidence_policy: policyFor("tag-33"),
             source_id: "s0",
             quote: `Vocal: ${singer}`,
             reasoning: "The listed vocalist is a human singer and supports the human-vocal tag.",
           },
           {
             tag_id: "tag-38",
+      evidence_policy: policyFor("tag-38"),
             source_id: "s2",
             quote: `透明感に満ちたボーカル・${singer}の歌声`,
             reasoning: "The description explicitly says this vocalist's voice has transparency.",
           },
           {
             tag_id: "tag-47",
+      evidence_policy: policyFor("tag-47"),
             source_id: "s2",
             quote: "希望が同居する世界観",
             reasoning: "The lyric description identifies hope as a theme of the song.",
@@ -388,7 +411,8 @@ it("keeps supported identity and descriptor tags when optional original and synt
     "recording:0:credit:0:UNSUPPORTED_EVIDENCE",
   );
   expect(analysis.tag_decisions).toContainEqual(
-    expect.objectContaining({ tag_id: "tag-33", status: "rejected" }),
+    expect.objectContaining({ tag_id: "tag-33",
+      evidence_policy: policyFor("tag-33"), status: "rejected" }),
   );
 });
 
@@ -953,24 +977,28 @@ it("packs only tag definitions with matching evidence while retaining custom def
   const tags = [
     {
       id: "tag-01",
+      evidence_policy: policyFor("tag-01"),
       name: "J-POP",
       category: "ジャンル",
       criterion: "日本語ポップ音楽と明示された楽曲。",
     },
     {
       id: "tag-07",
+      evidence_policy: policyFor("tag-07"),
       name: "エレクトロ",
       category: "ジャンル",
       criterion: "電子音やシンセ主体のサウンド。",
     },
     {
       id: "tag-32",
+      evidence_policy: policyFor("tag-32"),
       name: "速い",
       category: "テンポ感",
       criterion: "速いテンポと説明される。",
     },
     {
       id: "tag-51",
+      evidence_policy: policyFor("tag-51"),
       name: "シンセ主導",
       category: "ジャンル",
       criterion: "A synthesizer-led sound with electronic textures.",
@@ -994,12 +1022,14 @@ it("offers the human-vocal seed when current criterion wording means people sing
     [
       {
         id: "tag-33",
+      evidence_policy: policyFor("tag-33"),
         name: "人の歌声",
         category: "歌声の構成",
         criterion: "人または人のグループによる歌唱の明示。",
       },
       {
         id: "tag-34",
+      evidence_policy: policyFor("tag-34"),
         name: "合成歌声",
         category: "歌声の構成",
         criterion: "合成音声による歌唱の明示。",
@@ -1026,6 +1056,7 @@ it("recognizes a source's pop dance tune phrasing for the current dance-pop crit
   };
   const tag = {
     id: "tag-08",
+      evidence_policy: policyFor("tag-08"),
     name: "ダンスポップ",
     category: "ジャンル",
     criterion: "踊れるビートとポップなメロディの融合。",
@@ -1047,6 +1078,7 @@ it("recognizes a source's pop dance tune phrasing for the current dance-pop crit
           tags: [
             {
               tag_id: "tag-08",
+      evidence_policy: policyFor("tag-08"),
               source_id: "s0",
               quote,
               reasoning:
@@ -1061,7 +1093,8 @@ it("recognizes a source's pop dance tune phrasing for the current dance-pop crit
     [tag],
   );
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-08", evidence_type: "semantic_inference" },
+    { tag_id: "tag-08",
+      evidence_policy: policyFor("tag-08"), evidence_type: "semantic_inference" },
   ]);
 });
 
@@ -1093,6 +1126,7 @@ it("accepts the current human-vocal criterion when the source explicitly says �
           tags: [
             {
               tag_id: "tag-33",
+      evidence_policy: policyFor("tag-33"),
               source_id: "s0",
               quote: "人の歌声",
               reasoning:
@@ -1107,6 +1141,7 @@ it("accepts the current human-vocal criterion when the source explicitly says �
     [
       {
         id: "tag-33",
+      evidence_policy: policyFor("tag-33"),
         name: "人の歌声",
         category: "歌声の構成",
         criterion: "人または人のグループによる歌唱の明示。",
@@ -1115,7 +1150,8 @@ it("accepts the current human-vocal criterion when the source explicitly says �
   );
 
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-33", evidence_type: "direct" },
+    { tag_id: "tag-33",
+      evidence_policy: policyFor("tag-33"), evidence_type: "direct" },
   ]);
   expect(analysis.review_warnings).toEqual([]);
 });
@@ -1517,6 +1553,7 @@ it("fits a real-shaped 50-tag request without losing the associated article or i
                 : "歌詞テーマ";
   const tags = names.map((name, index) => ({
     id: `tag-${String(index + 1).padStart(2, "0")}`,
+    evidence_policy: policyFor(`tag-${String(index + 1).padStart(2, "0")}`),
     name,
     category: categoryFor(index),
     criterion: `Webの説明・公式情報で「${name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`,
@@ -1596,6 +1633,7 @@ it("accepts a specific English rationale for Japanese lyric-theme evidence witho
           tags: [
             {
               tag_id: "tag-47",
+      evidence_policy: policyFor("tag-47"),
               source_id: "s0",
               quote: "歌詞では迷いの先にも光を見つける物語を描く。",
               reasoning:
@@ -1610,6 +1648,7 @@ it("accepts a specific English rationale for Japanese lyric-theme evidence witho
     [
       {
         id: "tag-47",
+      evidence_policy: policyFor("tag-47"),
         name: "希望",
         category: "歌詞テーマ",
         criterion: "歌詞が希望を主題とするという解説。",
@@ -1618,7 +1657,8 @@ it("accepts a specific English rationale for Japanese lyric-theme evidence witho
   );
 
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-47", evidence_type: "semantic_inference" },
+    { tag_id: "tag-47",
+      evidence_policy: policyFor("tag-47"), evidence_type: "semantic_inference" },
   ]);
   expect(analysis.review_warnings).toEqual([]);
 });
@@ -1940,6 +1980,7 @@ it("finds only explicit synthpop and synthpop dance song tags in genre evidence"
   const definitions = [
     {
       id: "tag-07",
+      evidence_policy: policyFor("tag-07"),
       name: "エレクトロ",
       category: "ジャンル",
       criterion:
@@ -1947,6 +1988,7 @@ it("finds only explicit synthpop and synthpop dance song tags in genre evidence"
     },
     {
       id: "tag-08",
+      evidence_policy: policyFor("tag-08"),
       name: "ダンスポップ",
       category: "ジャンル",
       criterion:
@@ -2056,18 +2098,21 @@ it("does not import genre evidence from another named song later in the same par
   const tags = [
     {
       id: "tag-07",
+      evidence_policy: policyFor("tag-07"),
       name: "エレクトロ",
       category: "ジャンル",
       criterion: "電子音やシンセ主体のサウンド。",
     },
     {
       id: "tag-08",
+      evidence_policy: policyFor("tag-08"),
       name: "ダンスポップ",
       category: "ジャンル",
       criterion: "踊れるビートとポップなメロディの融合。",
     },
     {
       id: "tag-03",
+      evidence_policy: policyFor("tag-03"),
       name: "ロック",
       category: "ジャンル",
       criterion: "ギターやドラム主体のロック演奏。",
@@ -2163,12 +2208,14 @@ it("keeps explicit tempo and vocal properties in selected-song continuations", a
   const tags = [
     {
       id: "tag-32",
+      evidence_policy: policyFor("tag-32"),
       name: "速い",
       category: "テンポ感",
       criterion: "速いテンポと説明される。",
     },
     {
       id: "tag-38",
+      evidence_policy: policyFor("tag-38"),
       name: "透明感",
       category: "歌声の印象",
       criterion: "澄んだ透明な歌声の具体的な説明。",
@@ -2218,6 +2265,7 @@ it("accepts danceability from a song-specific techno groove and drum-machine des
           tags: [
             {
               tag_id: "tag-28",
+      evidence_policy: policyFor("tag-28"),
               source_id: "s0",
               quote,
               reasoning:
@@ -2232,6 +2280,7 @@ it("accepts danceability from a song-specific techno groove and drum-machine des
     [
       {
         id: "tag-28",
+      evidence_policy: policyFor("tag-28"),
         name: "ダンサブル",
         category: "勢い",
         criterion: "ダンサブルなビートやグルーヴを感じる演奏。",
@@ -2240,7 +2289,8 @@ it("accepts danceability from a song-specific techno groove and drum-machine des
   );
 
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-28", source_id: "s0", evidence_type: "semantic_inference" },
+    { tag_id: "tag-28",
+      evidence_policy: policyFor("tag-28"), source_id: "s0", evidence_type: "semantic_inference" },
   ]);
   expect(analysis.review_warnings).toEqual([]);
 });
@@ -2263,18 +2313,21 @@ it("restricts the response tag ID enum to candidates that survive evidence fitti
   const definitions = [
     {
       id: "tag-07",
+      evidence_policy: policyFor("tag-07"),
       name: "エレクトロ",
       category: "ジャンル",
       criterion: "電子音やシンセ主体のサウンド。",
     },
     {
       id: "tag-08",
+      evidence_policy: policyFor("tag-08"),
       name: "ダンスポップ",
       category: "ジャンル",
       criterion: "踊れるビートとポップなメロディの融合。",
     },
     {
       id: "tag-14",
+      evidence_policy: policyFor("tag-14"),
       name: "切ない",
       category: "雰囲気",
       criterion: "悲しさや胸が締めつけられる曲調。",

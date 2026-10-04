@@ -1,5 +1,9 @@
 import { useCallback, useMemo, useState } from "react";
-import type { CreditRole, Statistics } from "../shared/contracts";
+import type {
+  CreditRole,
+  Statistics,
+  TagCoverageGroup,
+} from "../shared/contracts";
 import { todayInJapan } from "./dates";
 import { useVisibleRefresh } from "./useVisibleRefresh";
 
@@ -7,6 +11,12 @@ type ApiReader = { get<T>(path: string, options?: { signal?: AbortSignal }): Pro
 type Props = { api: ApiReader; participantId?: string; mode: "rankings" | "personal" };
 
 const periodNames = { all: "全期間", week: "週", month: "月", day: "日", custom: "任意期間" } as const;
+const coverageNames: Record<TagCoverageGroup, string> = {
+  genre_sound: "ジャンル・音作り",
+  mood_energy_tempo: "雰囲気・勢い・テンポ",
+  voice: "歌声",
+  lyric_theme: "歌詞テーマ",
+};
 const roleNames: Record<CreditRole, string> = {
   vocalist: "ボーカル",
   composer: "作曲者",
@@ -91,9 +101,30 @@ export function StatisticsPanel({ api, participantId, mode }: Props) {
     {statistics && <>
       <div className="summary-strip" aria-label="集計概要">
         <div><strong>{statistics.total_records}</strong><span>有効な回答</span></div>
-        <div><strong>{statistics.unparsed_records}</strong><span>未解析</span></div>
+        <div><strong>{statistics.unparsed_records}</strong><span>coverage未完了</span></div>
         <div><strong>{statistics.from}〜{statistics.to}</strong><span>集計期間</span></div>
       </div>
+      {statistics.coverage && (
+        <section className="coverage-summary subsection" aria-label="タグ調査coverage">
+          <h3>タグ調査のcoverage</h3>
+          <div className="coverage-grid">
+            {(Object.keys(coverageNames) as TagCoverageGroup[]).map((group) => {
+              const item = statistics.coverage[group];
+              return (
+                <div className="coverage-card" key={group}>
+                  <strong>{coverageNames[group]}</strong>
+                  <span>完了 {item.complete}件</span>
+                  <span>取得不可 {item.unavailable}件</span>
+                  <span>未調査 {item.unknown}件</span>
+                </div>
+              );
+            })}
+          </div>
+          <p className="muted-note">
+            「未解析」はタグの有無ではなく、4つの調査領域に未調査が残っている回答を数えます。
+          </p>
+        </section>
+      )}
 
       {mode === "rankings" ? <section className="subsection">
         <h3>人気曲の順位</h3>

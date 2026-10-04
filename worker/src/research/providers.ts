@@ -2,6 +2,8 @@ import type {
   CreditRole,
   VersionKind,
   RecordingMetadata,
+  SourceQualityTier,
+  TagEvidencePolicy,
 } from "../../../shared/contracts";
 import { catalogUrl } from "../catalog";
 export interface Evidence {
@@ -283,6 +285,51 @@ export function linkedDescriptionRecording(source: Evidence, recording: string) 
   return false;
 }
 
+export function researchSourceQuality(source: Evidence): {
+  tier: SourceQualityTier;
+  reason: string;
+} {
+  if (
+    source.recording_associations?.some(
+      (association) =>
+        association.provenance === "worker_verified_release_v1" &&
+        association.basis === "official_release",
+    )
+  )
+    return {
+      tier: "official",
+      reason: "Workerで公式リリースへの関連を検証済み",
+    };
+  let host = "";
+  try {
+    host = new URL(source.url).hostname.toLowerCase();
+  } catch {}
+  if (
+    host === "open.spotify.com" ||
+    host === "music.apple.com" ||
+    host === "ototoy.jp" ||
+    host === "youtube.com" ||
+    host === "www.youtube.com" ||
+    host === "music.youtube.com"
+  )
+    return {
+      tier: "platform",
+      reason: "配信・動画プラットフォーム上の一次メタデータ/ページ",
+    };
+  if (host === "reddit.com" || host.endsWith(".reddit.com"))
+    return { tier: "community", reason: "コミュニティ投稿" };
+  if (
+    source.recording_associations?.some(
+      (association) => association.provenance === "worker_verified_song_v1",
+    )
+  )
+    return {
+      tier: "editorial",
+      reason: "対象曲を明示した解説本文をWorkerで曲単位に検証済み",
+    };
+  return { tier: "unknown", reason: "発行主体の品質区分を自動確認できない" };
+}
+
 const cleanRecordingText = (raw: string) => {
   const clean = raw
     .slice(0, 48000)
@@ -354,17 +401,35 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function exactSongTitleIsSubject(text: string, title: string) {
+function exactSongTitleIsSubject(
+  text: string,
+  title: string,
+  artist?: string,
+) {
   const normalized = text.normalize("NFKC");
   const escapedTitle = escapeRegExp(title.normalize("NFKC").trim());
   if (!escapedTitle) return false;
-  // The title must be named as a song, single, track, or recording in the
-  // prose. This prevents a short title such as "Scatman" from matching only
-  // the artist name "Scatman John" or an unrelated title like "Scatman's World".
-  return new RegExp(
-    `(?:^|[^\\p{L}\\p{N}])["'“‘]?${escapedTitle}["'”’]?\\s+(?:is|was|became|becomes|remains|served\\s+as)\\s+(?:(?:a|an|the|his|her|their)\\s+)?(?:(?:[\\p{L}\\p{N}]+(?:[-’'][\\p{L}\\p{N}]+)?\\s+){0,6})(?:song|single|track|recording)\\b`,
+  // Require a song/track predicate so a short title cannot match an artist name
+  // or a nearby unrelated title. Japanese prose uses the same subject rule.
+  const english = new RegExp(
+    `(?:^|[^\\p{L}\\p{N}])["'“‘「『]?${escapedTitle}["'”’」』]?\\s+(?:is|was|became|becomes|remains|served\\s+as)\\s+(?:(?:a|an|the|his|her|their)\\s+)?(?:(?:[\\p{L}\\p{N}]+(?:[-’'][\\p{L}\\p{N}]+)?\\s+){0,6})(?:song|single|track|recording)\\b`,
     "iu",
-  ).test(normalized);
+  );
+  if (english.test(normalized)) return true;
+  const quotedTitle = `[「『"'“‘]?${escapedTitle}[」』"'”’]?`;
+  const songNoun = "(?:楽曲|曲|シングル|トラック|作品)";
+  const titleFirst = new RegExp(
+    `(?:^|[^\\p{L}\\p{N}])${quotedTitle}\\s*(?:は|が)\\s*[^。！？]{0,100}${songNoun}(?:[。！？]|$)`,
+    "iu",
+  );
+  if (titleFirst.test(normalized)) return true;
+  if (!artist?.trim()) return false;
+  const escapedArtist = escapeRegExp(artist.normalize("NFKC").trim());
+  const artistFirst = new RegExp(
+    `(?:^|[^\\p{L}\\p{N}])${escapedArtist}\\s*(?:の|による|が(?:発表|リリース|配信)した)\\s*${quotedTitle}\\s*(?:は|が)?\\s*[^。！？]{0,100}${songNoun}(?:[。！？]|$)`,
+    "iu",
+  );
+  return artistFirst.test(normalized);
 }
 
 function exactArtistMention(text: string, artist: string) {
@@ -414,7 +479,7 @@ function hasOtherNamedSongSubject(
   artist: string,
 ) {
   if (foreignNamedSongTitle(sentence, title, artist)) return true;
-  if (exactSongTitleIsSubject(sentence, title)) return false;
+  if (exactSongTitleIsSubject(sentence, title, artist)) return false;
   const quoted =
     /["“‘][^"“”‘’]{2,160}["”’]\s+(?:is|was|became|becomes|remains)\s+(?:(?:a|an|the|his|her|their)\s+)?(?:(?:[\p{L}\p{N}]+(?:[-’'][\p{L}\p{N}]+)?\s+){0,6})(?:song|single|track|recording)\b/iu.test(
       sentence,
@@ -434,6 +499,9 @@ function isSongScopedContinuation(sentence: string) {
     ) ||
     /^As\s+[^.!?]{1,100},\s+(?:the\s+(?:lyrics|song|track|recording|music|sound)|its|their)\b/i.test(
       text,
+    ) ||
+    /^(?:この曲|同曲|本作|楽曲|曲調|サウンド|音楽性|歌詞|ボーカル|歌声|テンポ|リズム|ビート|アレンジ|編曲)(?:は|が|では|には)/.test(
+      text,
     )
   );
 }
@@ -451,7 +519,7 @@ function exactSongScopes(
       .map((sentence) => sentence.trim())
       .filter(Boolean);
     const subject = sentences.findIndex((sentence) =>
-      exactSongTitleIsSubject(sentence, title),
+      exactSongTitleIsSubject(sentence, title, artist),
     );
     if (subject < 0) continue;
     if (hasOtherNamedSongSubject(sentences[subject], title, artist)) continue;
@@ -1919,12 +1987,48 @@ const seedTagSignals: Record<string, RegExp> = {
   "tag-49": /歌詞.{0,240}(?:自己探求|自分探し)|(?:自己探求|自分探し).{0,240}歌詞|\blyrics?.{0,240}self[- ]?discovery/i,
   "tag-50": /歌詞.{0,240}(?:社会|世界(?!観))|(?:社会|世界(?!観)).{0,240}歌詞|\blyrics?.{0,240}(?:society|the world)\b/i,
 };
-function trustedSeedProfile(tag: {
+type TagDefinition = {
   id: string;
   name: string;
   category?: string;
   criterion?: string;
-}) {
+  evidence_policy?: TagEvidencePolicy | null;
+};
+
+function policySignal(tag: TagDefinition) {
+  const patterns = tag.evidence_policy?.positive_patterns?.filter(Boolean);
+  if (!patterns?.length) return undefined;
+  try {
+    return new RegExp(patterns.map((pattern) => `(?:${pattern})`).join("|"), "iu");
+  } catch {
+    return undefined;
+  }
+}
+
+function policyNegativeSignal(tag: TagDefinition) {
+  const patterns = tag.evidence_policy?.negative_patterns?.filter(Boolean);
+  if (!patterns?.length) return undefined;
+  try {
+    return new RegExp(patterns.map((pattern) => `(?:${pattern})`).join("|"), "iu");
+  } catch {
+    return undefined;
+  }
+}
+
+function policyContextSatisfied(tag: TagDefinition, text: string) {
+  return (tag.evidence_policy?.required_context ?? []).every((context) => {
+    if (context === "genre") return descriptorSearchGroups[0].cues.test(text);
+    if (context === "mood" || context === "energy" || context === "tempo")
+      return descriptorSearchGroups[1].cues.test(text);
+    if (context === "voice") return descriptorSearchGroups[2].cues.test(text);
+    if (context === "lyrics") return descriptorSearchGroups[3].cues.test(text);
+    return true;
+  });
+}
+
+function trustedSeedProfile(tag: TagDefinition) {
+  const configured = policySignal(tag);
+  if (configured) return configured;
   const number = Number(tag.id.match(/^tag-(\d+)$/)?.[1]);
   const criterion = tag.criterion ?? "";
   const profile = seedTagSignals[tag.id];
@@ -2108,13 +2212,14 @@ function identityCreditWindow(
 }
 
 function tagSemanticDecision(
-  tag: { id: string; name: string; category?: string; criterion?: string },
+  tag: TagDefinition,
   quoteText: string,
   reasoning: string,
   factualVoice: boolean,
   contextText = quoteText,
 ) {
   const profile = trustedSeedProfile(tag);
+  const policyNegative = policyNegativeSignal(tag);
   const quote = norm(quoteText);
   const nameMatch = norm(tag.name).length > 1 && quote.includes(norm(tag.name));
   const criterionMatch = criterionTerms(tag.criterion).some((term) =>
@@ -2158,11 +2263,15 @@ function tagSemanticDecision(
     : profile
       ? profile.test(contextText) &&
         !tagEvidenceNegated(contextText, profile) &&
+        !policyNegative?.test(contextText) &&
+        policyContextSatisfied(tag, contextText) &&
         (!needsVoiceNoun || voiceNoun) &&
         moodOrEnergyContext
       : (nameMatch || criterionMatch) &&
         categoryCue &&
+        policyContextSatisfied(tag, contextText) &&
         moodOrEnergyContext &&
+        !policyNegative?.test(contextText) &&
         !tagEvidenceNegated(contextText, customSignal);
   const hedged =
     /\b(?:maybe|possibly|perhaps|might|could be|seems?)\b|かもしれ|可能性が|らしい|っぽい|推測/i.test(
@@ -2193,7 +2302,7 @@ function tagSemanticDecision(
 }
 
 export function inferenceTagCandidates(
-  tags: { id: string; name: string; category?: string; criterion?: string }[],
+  tags: TagDefinition[],
   evidence: Evidence[],
   recording?: string | null,
 ) {
@@ -2209,10 +2318,16 @@ export function inferenceTagCandidates(
   );
   return tags.filter((tag) => {
     const profile = trustedSeedProfile(tag);
-    const isUnchangedSeed = Boolean(profile);
-    if (isUnchangedSeed && profile) {
-      if (tag.id === "tag-33" && vocals) return true;
-      return profile.test(descriptive) && !tagEvidenceNegated(descriptive, profile);
+    const policyNegative = policyNegativeSignal(tag);
+    if (profile) {
+      if (tag.id === "tag-33" && vocals && policyContextSatisfied(tag, descriptive))
+        return true;
+      return (
+        profile.test(descriptive) &&
+        !tagEvidenceNegated(descriptive, profile) &&
+        !policyNegative?.test(descriptive) &&
+        policyContextSatisfied(tag, descriptive)
+      );
     }
     const normalizedText = norm(descriptive);
     return [tag.name, ...criterionTerms(tag.criterion)].some(

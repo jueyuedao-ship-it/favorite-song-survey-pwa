@@ -409,7 +409,9 @@ describe("D1 HTTP capability and mutation integrity", () => {
     const song = await version(), rec = await record(A, null, "2026-09-30");
     expect((await api(`/records/${rec.data.id}/research`, "POST", { operation_id: op(), expected_revision: 1, kind: "tags" }, A)).status).toBe(400);
     const job = (await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.version_id === song.id);
-    await db.prepare("UPDATE research_jobs SET data=json_set(data,'$.status','complete','$.stage','done') WHERE id=?").bind(job.id).run();
+    const { tagDictionaryFingerprint } = await import("../src/tags");
+    const dictionaryVersion = tagDictionaryFingerprint((await api("/tags")).data.items);
+    await db.prepare("UPDATE research_jobs SET data=json_set(data,'$.status','complete','$.stage','done','$.analysis_version','2','$.dictionary_version',?) WHERE id=?").bind(dictionaryVersion, job.id).run();
     expect((await api(`/records/${rec.data.id}`, "PATCH", { operation_id: op(), expected_revision: 1, version_id: song.id }, A)).status).toBe(200);
     expect((await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.id === job.id).status).toBe("complete");
   });
@@ -954,7 +956,7 @@ describe("D1 HTTP capability and mutation integrity", () => {
     const disabled = await api(
       `/admin/data/tags/${tags[0].id}`,
       "PATCH",
-      { operation_id: op(), expected_revision: 1, values: { active: false } },
+      { operation_id: op(), expected_revision: tags[0].revision, values: { active: false } },
       admin,
     );
     expect(disabled.status).toBe(200);
@@ -1396,13 +1398,13 @@ describe("D1 HTTP capability and mutation integrity", () => {
       )
     ).data;
     expect(stats.total_records).toBe(2);
-    expect(stats.unparsed_records).toBe(1);
+    expect(stats.unparsed_records).toBe(2);
     expect(stats.weekly_tags).toHaveLength(12);
     const week = stats.weekly_tags[11];
     expect(week).toMatchObject({
       week_start: "2026-09-28",
       total_records: 2,
-      unparsed_records: 1,
+      unparsed_records: 2,
     });
     expect(week.tags[0]).toMatchObject({ count: 1, percentage: 50 });
   });

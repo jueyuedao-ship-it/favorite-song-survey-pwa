@@ -745,13 +745,50 @@ describe("D1 HTTP capability and mutation integrity", () => {
   it("resolving an unknown duplicate reports conflict without losing the record or lookup job", async () => {
     await register("A", A);
     const song = await version();
-    await record(A, song.id, "2026-09-30");
-    const unknown = await record(A, null, "2026-09-30");
+    const existing = await record(A, song.id, "2026-09-30");
+    expect(existing.status).toBe(201);
+    const unknown = await record(A, null, "2026-10-01");
+    expect(unknown.status).toBe(201);
+    expect(unknown.data).toMatchObject({
+      version_id: null,
+      record_date: "2026-10-01",
+    });
+    const versionJob = (
+      await api("/admin/jobs", "GET", undefined, admin)
+    ).data.items.find((job: any) => job.version_id === song.id);
+    expect(versionJob).toBeTruthy();
+    await db
+      .prepare(
+        "UPDATE research_jobs SET data=json_set(data,'$.status','needs_review') WHERE id=?",
+      )
+      .bind(versionJob.id)
+      .run();
     const before = (await api("/admin/export", "GET", undefined, admin)).data;
+    const lookupBefore = before.tables.research_jobs.find(
+      (job: any) => job.response_id === unknown.data.id,
+    );
+    const tagQueueBefore = before.tables.research_jobs.find(
+      (job: any) => job.version_id === song.id,
+    );
+    expect(lookupBefore).toMatchObject({
+      status: "queued",
+      response_id: unknown.data.id,
+    });
+    expect(lookupBefore.stage).toBeUndefined();
+    expect(tagQueueBefore).toMatchObject({
+      status: "needs_review",
+      version_id: song.id,
+    });
+    expect(tagQueueBefore.purpose).toBeUndefined();
     const result = await api(
       `/records/${unknown.data.id}`,
       "PATCH",
-      { operation_id: op(), expected_revision: 1, version_id: song.id },
+      {
+        operation_id: op(),
+        expected_revision: 1,
+        version_id: song.id,
+        record_date: "2026-09-30",
+      },
       A,
     );
     expect(result.status).toBe(409);
@@ -759,6 +796,15 @@ describe("D1 HTTP capability and mutation integrity", () => {
     expect(after.high_watermark).toBe(before.high_watermark);
     expect(after.tables.responses).toEqual(before.tables.responses);
     expect(after.tables.research_jobs).toEqual(before.tables.research_jobs);
+    expect(
+      after.tables.research_jobs.find((job: any) => job.id === lookupBefore.id),
+    ).toEqual(lookupBefore);
+    expect(
+      after.tables.research_jobs.find((job: any) => job.id === tagQueueBefore.id),
+    ).toEqual(tagQueueBefore);
+    expect(
+      after.tables.responses.some((response: any) => response.id === existing.data.id),
+    ).toBe(true);
     expect((await api("/records")).data.items).toHaveLength(2);
   });
   it("preserves one delete event when two concurrent deletes race and safely replays the winning operation", async () => {

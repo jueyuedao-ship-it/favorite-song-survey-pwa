@@ -352,7 +352,7 @@ export function researchJob(
     last_error: null,
     lease_until: null,
     dictionary_version: "1",
-    analysis_version: "1",
+    analysis_version: "2",
   });
 }
 export async function candidates(
@@ -580,8 +580,19 @@ export async function recordMutation(
           table: "research_jobs",
           before: existing,
           after: updated(existing, {
-            stage: "search", evidence: [], analysis: undefined, metadata_cursor: 0, catalog_cursor:0,
-            purpose: undefined, response_revision: undefined,
+            stage: "search",
+            evidence: [],
+            analysis: undefined,
+            metadata_cursor: 0,
+            metadata_source_cursor: 0,
+            catalog_cursor: 0,
+            descriptive_status: undefined,
+            descriptive_source_ids: undefined,
+            descriptive_category: undefined,
+            descriptive_coverage: undefined,
+            analysis_version: "2",
+            purpose: undefined,
+            response_revision: undefined,
             query: {
               title: row.unresolved_title!,
               artist_hint: row.artist_hint,

@@ -36,14 +36,18 @@ function lookupFor(jobs: ResearchJob[], responseId: string) {
   );
 }
 const reset = () => ({
+  analysis_version: "2",
   stage: "search" as const,
   evidence: [],
   analysis: undefined,
   raw_model: undefined,
   descriptive_status: undefined,
   descriptive_source_ids: undefined,
+  descriptive_category: undefined,
+  descriptive_coverage: undefined,
   catalog_cursor: 0,
   metadata_cursor: 0,
+  metadata_source_cursor: 0,
   candidates: [],
   status: "queued" as const,
   attempts: 0,
@@ -67,7 +71,8 @@ export async function queueTagResearch(
     (automatic &&
       existing &&
       !existing.deleted_at &&
-      existing.status === "complete")
+      existing.status === "complete" &&
+      existing.analysis_version === "2")
   )
     return;
   const lookup = previous ? lookupFor(jobs, previous.id) : undefined;
@@ -92,6 +97,7 @@ export async function queueTagResearch(
   };
   const values = {
     ...reset(),
+    analysis_version: "2",
     purpose: "tag_enrichment" as const,
     query,
     response_revision: undefined,

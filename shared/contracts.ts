@@ -114,6 +114,15 @@ export interface ResearchEvidence {
   title: string;
   content: string;
   metadata?: RecordingMetadata;
+  /** Worker-derived for descriptive claims only; never accepted from provider output. */
+  recording_associations?: {
+    provenance: "worker_verified_release_v1";
+    reference_url: string;
+    basis: "official_release";
+    artist: string;
+    title_quote: string;
+    release_url: string;
+  }[];
 }
 export interface ResearchClaim {
   name: string;
@@ -141,6 +150,7 @@ export interface ResearchRecording {
     source_id: string;
     quote: string;
     reasoning?: string;
+    evidence_type?: "direct" | "semantic_inference";
   }[];
 }
 export interface ResearchAnalysis {
@@ -148,6 +158,14 @@ export interface ResearchAnalysis {
   /** Privileged job/result evidence; never copied to public catalog detail. */
   raw_model?: string;
   review_warnings?: string[];
+  /** Private review trail for accepted and rejected automatic tag decisions. */
+  tag_decisions?: {
+    tag_id: string;
+    source_id: string;
+    status: "accepted" | "rejected";
+    evidence_type?: "direct" | "semantic_inference";
+    reason_code: string;
+  }[];
 }
 export interface ResearchJob extends Row {
   purpose?: "tag_enrichment" | "candidate_lookup";
@@ -165,9 +183,12 @@ export interface ResearchJob extends Row {
   evidence?: ResearchEvidence[];
   descriptive_status?: "complete" | "unavailable";
   descriptive_source_ids?: string[];
+  descriptive_category?: string;
+  descriptive_coverage?: Record<string, "complete" | "unavailable">;
   analysis?: ResearchAnalysis;
   raw_model?: string;
   metadata_cursor?: number;
+  metadata_source_cursor?: number;
   catalog_cursor?: number;
   version_id: string | null;
   response_id: string | null;

@@ -249,7 +249,22 @@ async function retryJob(request: Request, env: WorkerEnv, id: string) {
       )
         conflict("処理中です");
       const row = updated(before, {
-        ...(before.stage === "done" ? {stage:"search" as const,evidence:[],analysis:undefined,candidates:[],metadata_cursor:0,catalog_cursor:0}:{}),
+        ...(before.stage === "done"
+          ? {
+              stage: "search" as const,
+              evidence: [],
+              analysis: undefined,
+              candidates: [],
+              metadata_cursor: 0,
+              metadata_source_cursor: 0,
+              catalog_cursor: 0,
+              descriptive_status: undefined,
+              descriptive_source_ids: undefined,
+              descriptive_category: undefined,
+              descriptive_coverage: undefined,
+              analysis_version: "2",
+            }
+          : {}),
         status: "queued",
         attempts: 0,
         last_error: null,

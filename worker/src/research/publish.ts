@@ -9,6 +9,7 @@ import { researchJob } from "../catalog";
 import {
   ResearchError,
   linkedRecording,
+  linkedDescriptionRecording,
   knownIdentitySchema,
   norm,
   type Analysis,
@@ -127,7 +128,14 @@ export async function publishCatalog(
         },
         candidates: [candidate],
         metadata_cursor: 0,
+        metadata_source_cursor: 0,
         catalog_cursor: 0,
+        analysis_version: j.analysis_version,
+        dictionary_version: j.dictionary_version,
+        descriptive_status: undefined,
+        descriptive_source_ids: undefined,
+        descriptive_category: undefined,
+        descriptive_coverage: undefined,
         status: "queued" as const,
         next_attempt_at: now(),
         attempts: 0,
@@ -152,6 +160,7 @@ export async function publishCatalog(
       stage: last ? (j.version_id ? "metadata" : "await_versions") : "catalog",
       candidates: choices,
       metadata_cursor: 0,
+      metadata_source_cursor: 0,
     },
     changes,
   );
@@ -195,10 +204,16 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
   const version = await getRow(env.DB, "versions", j.candidates[task.idx].id);
   const evidence = j.evidence!.find((x) => x.id === task.r.source_id)!;
   const changes: Change[] = [];
+  const linkedSources =
+    task.type === "source"
+      ? j.evidence!.filter((source) =>
+          linkedDescriptionRecording(source, task.r.reference_url),
+        )
+      : [];
+  const sourceCursor = j.metadata_source_cursor ?? 0;
+  const sourceBatch = linkedSources.slice(sourceCursor, sourceCursor + 4);
   if (task.type === "source") {
-    for (const e of j.evidence!.filter((e) =>
-      linkedRecording(e, task.r.reference_url),
-    )) {
+    for (const e of sourceBatch) {
       const existing = (
         await rows<any>(
           env.DB,
@@ -251,7 +266,10 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
       // A locked role is settled before entity creation; even a different source
       // spelling must not create a new, unused entity beside an admin correction.
       if (existing.some((x) => x.manual_lock)) {
-        await save(env, j, { metadata_cursor: cursor + 1 });
+        await save(env, j, {
+          metadata_cursor: cursor + 1,
+          metadata_source_cursor: 0,
+        });
         return;
       }
       const entities = await rows<any>(
@@ -264,6 +282,7 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
       if (entities.length === 60 || aliases.length === 60) {
         await save(env, j, {
           metadata_cursor: cursor + 1,
+          metadata_source_cursor: 0,
           analysis: {
             ...a,
             review_warnings: [
@@ -284,6 +303,7 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
       if (matches.length > 1) {
         await save(env, j, {
           metadata_cursor: cursor + 1,
+          metadata_source_cursor: 0,
           analysis: {
             ...a,
             review_warnings: [
@@ -361,7 +381,9 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
         const values = {
           version_id: version.id,
           tag_id: t.tag_id,
-          evidence: `AI判定: ${t.reasoning}\n引用: ${t.quote}`,
+          evidence: `AI判定（${
+            t.evidence_type === "direct" ? "直接記述" : "意味上の推論"
+          }）: ${t.reasoning}\n引用: ${t.quote}`,
           source_id: source.id,
           origin: "research",
           confirmed: true,
@@ -406,7 +428,19 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
         }),
       });
   }
-  await save(env, j, { metadata_cursor: cursor + 1 }, changes);
+  const nextSourceCursor = sourceCursor + sourceBatch.length;
+  const sourceTaskComplete =
+    task.type !== "source" || nextSourceCursor >= linkedSources.length;
+  await save(
+    env,
+    j,
+    {
+      metadata_cursor: sourceTaskComplete ? cursor + 1 : cursor,
+      metadata_source_cursor:
+        task.type === "source" && !sourceTaskComplete ? nextSourceCursor : 0,
+    },
+    changes,
+  );
 }
 async function finish(env: WorkerEnv, j: ResearchJob) {
   const choices: CatalogCandidate[] = [];

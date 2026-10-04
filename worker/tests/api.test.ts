@@ -326,6 +326,7 @@ describe("D1 HTTP capability and mutation integrity", () => {
     const original = (await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.response_id === rec.data.id);
     await db.prepare("UPDATE research_jobs SET data=json_set(data,'$.status','needs_review') WHERE id=?").bind(original.id).run();
     expect((await api(`/records/${rec.data.id}/research`, "POST", {operation_id:op(),expected_revision:1,kind:"candidates",title:"Unconfirmed tune"}, A)).status).toBe(200);
+    await db.prepare("UPDATE research_jobs SET data=json_set(data,'$.descriptive_category','voice','$.descriptive_coverage',json('{\"voice\":\"complete\"}')) WHERE id=?").bind(original.id).run();
     const changed = await api(`/records/${rec.data.id}`, "PATCH", {operation_id:op(),expected_revision:1,unresolved_title:"New tune"}, A);
     expect(changed.status).toBe(200);
     let lookup = (await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.id === original.id);
@@ -335,6 +336,8 @@ describe("D1 HTTP capability and mutation integrity", () => {
     lookup = (await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.id === original.id);
     expect(await sourceQuery({ DB: db } as WorkerEnv, lookup)).toMatchObject({title:"New tune"});
     expect(lookup).toMatchObject({stage:"search",status:"queued"});
+    expect(lookup.descriptive_category).toBeUndefined();
+    expect(lookup.descriptive_coverage).toBeUndefined();
   });
   it("candidate re-search prefers an active lookup over a historical tombstone", async () => {
     await register("A", A); const song=await version(), rec=await record(A,null,"2026-09-30");
@@ -349,12 +352,16 @@ describe("D1 HTTP capability and mutation integrity", () => {
     await register("A", A);
     const song = await version("Mirage"), unknown = await record(A, null, "2026-09-30");
     const job = (await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.version_id === song.id);
-    await db.prepare("UPDATE research_jobs SET data=json_set(data,'$.status','needs_review','$.stage','done','$.descriptive_status','complete','$.raw_model','old','$.analysis',json('{}')) WHERE id=?").bind(job.id).run();
+    await db.prepare("UPDATE research_jobs SET data=json_set(data,'$.status','needs_review','$.stage','done','$.analysis_version','1','$.descriptive_status','complete','$.descriptive_source_ids',json('[\"s1\"]'),'$.descriptive_category','lyric_theme','$.descriptive_coverage',json('{\"lyric_theme\":\"complete\"}'),'$.raw_model','old','$.analysis',json('{}')) WHERE id=?").bind(job.id).run();
     const body = { operation_id: op(), expected_revision: 1, version_id: song.id };
     expect((await api(`/records/${unknown.data.id}`, "PATCH", body, A)).status).toBe(200);
     const after = (await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.id === job.id);
     expect(after).toMatchObject({ status: "queued", stage: "search", purpose: "tag_enrichment", candidates: [] });
     expect(after.analysis).toBeUndefined(); expect(after.descriptive_status).toBeUndefined();
+    expect(after.analysis_version).toBe("2");
+    expect(after.descriptive_source_ids).toBeUndefined();
+    expect(after.descriptive_category).toBeUndefined();
+    expect(after.descriptive_coverage).toBeUndefined();
     const replay = await api(`/records/${unknown.data.id}`, "PATCH", body, A);
     expect(replay.status).toBe(200);
     expect((await api("/admin/jobs", "GET", undefined, admin)).data.items.find((j: any) => j.id === job.id).revision).toBe(after.revision);
@@ -894,25 +901,44 @@ describe("D1 HTTP capability and mutation integrity", () => {
       0,
     );
     const job = (await api("/admin/jobs", "GET", undefined, admin)).data
-      .items[0];
+      .items.find((item: any) => item.version_id === song.id);
+    const completedTagJob = {
+      ...job,
+      stage: "done",
+      purpose: "tag_enrichment",
+      analysis_version: "1",
+      descriptive_status: "complete",
+      descriptive_source_ids: ["s1"],
+      descriptive_category: "lyric_theme",
+      descriptive_coverage: { lyric_theme: "complete" },
+    };
+    await db
+      .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+      .bind(JSON.stringify(completedTagJob), job.id)
+      .run();
     const retry = await api(
       `/admin/jobs/${job.id}/retry`,
       "POST",
-      { operation_id: op(), expected_revision: 1 },
+      { operation_id: op(), expected_revision: job.revision },
       admin,
     );
     expect(retry.status).toBe(200);
     expect(retry.data).toMatchObject({
       status: "queued",
-      revision: 2,
+      revision: job.revision + 1,
       attempts: 0,
+      analysis_version: "2",
     });
+    expect(retry.data.descriptive_status).toBeUndefined();
+    expect(retry.data.descriptive_source_ids).toBeUndefined();
+    expect(retry.data.descriptive_category).toBeUndefined();
+    expect(retry.data.descriptive_coverage).toBeUndefined();
     expect(
       (
         await api(
           `/admin/jobs/${job.id}/retry`,
           "POST",
-          { operation_id: op(), expected_revision: 1 },
+          { operation_id: op(), expected_revision: job.revision },
           admin,
         )
       ).status,

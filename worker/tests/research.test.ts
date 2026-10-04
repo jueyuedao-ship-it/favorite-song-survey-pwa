@@ -7,10 +7,12 @@ import {
 } from "../src/research/runner";
 import { newRow, allRows } from "../src/store";
 import { researchJob, safeUrl, candidates, songDetail } from "../src/catalog";
+import { queueTagResearch } from "../src/record-research";
 import type {
   WorkerEnv,
   ResearchJob,
   CreditRole,
+  Version,
 } from "../../shared/contracts";
 import { registerRuntimeTransport } from "./miniflare-transport";
 let mf: Miniflare, db: D1Database;
@@ -380,6 +382,80 @@ it("candidate publication preserves a pending independent tag job", async () => 
   expect(
     (await allRows(db, "research_jobs")).find((j) => j.id === pending.id),
   ).toEqual(pending);
+});
+
+it("restarts a failed shared version job with the current analysis version and no stale descriptor state", async () => {
+  const { publishCatalog } = await import("../src/research/publish");
+  const work = await insert(
+    "works",
+    newRow({ title: "Blue Song", manual_lock: false }),
+  );
+  const version = await insert(
+    "versions",
+    newRow({
+      work_id: work.id,
+      title: "Blue Song",
+      kind: "original",
+      reference_url: url,
+      uploader_entity_id: null,
+      research_status: "needs_review",
+      manual_lock: false,
+    }),
+  );
+  const failed = {
+    ...researchJob(version),
+    version_id: version.id,
+    status: "needs_review" as const,
+    stage: "done" as const,
+    analysis_version: "1",
+    dictionary_version: "old-dictionary",
+    descriptive_category: "voice",
+    descriptive_status: "unavailable" as const,
+    descriptive_source_ids: ["s1"],
+    descriptive_coverage: { genre_sound: "complete" as const, voice: "unavailable" as const },
+  };
+  await insert("research_jobs", failed);
+  const evidence = [{ id: "s0", url, title: "Blue Song", content: "Blue Song" }];
+  const lookup = {
+    ...researchJob(null),
+    stage: "catalog" as const,
+    purpose: "candidate_lookup" as const,
+    analysis_version: "2",
+    dictionary_version: "current-dictionary",
+    evidence,
+  };
+  await insert("research_jobs", lookup);
+  const analysis = {
+    recordings: [
+      {
+        title: "Blue Song",
+        reference_url: url,
+        kind: "original" as const,
+        source_id: "s0",
+        quote: "Blue Song",
+        credits: [],
+        tags: [],
+      },
+    ],
+    raw_model: "{}",
+    review_warnings: [],
+  };
+
+  await publishCatalog(env(), lookup, analysis);
+
+  const restarted = (await allRows(db, "research_jobs")).find(
+    (job) => job.id === failed.id,
+  )!;
+  expect(restarted).toMatchObject({
+    status: "queued",
+    stage: "metadata",
+    analysis_version: "2",
+    dictionary_version: "current-dictionary",
+  });
+  expect(restarted.descriptive_status).toBeUndefined();
+  expect(restarted.descriptive_category).toBeUndefined();
+  expect(restarted.descriptive_source_ids).toBeUndefined();
+  expect(restarted.descriptive_coverage).toBeUndefined();
 });
 
 it("tag enrichment preserves the chosen recording identity and reports unsupported tags", async () => {
@@ -813,6 +889,106 @@ it("bounds every invocation to D1 free query limits using real D1 transport", as
   expect(max).toBeGreaterThan(10);
   expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
 });
+it("publishes linked evidence in resumable batches below the D1 per-invocation limit", async () => {
+  const work = await insert(
+    "works",
+    newRow({ title: "Blue Song", manual_lock: false }),
+  );
+  const version = await insert(
+    "versions",
+    newRow({
+      work_id: work.id,
+      title: "Blue Song",
+      kind: "original",
+      reference_url: url,
+      uploader_entity_id: null,
+      research_status: "running",
+      manual_lock: false,
+    }),
+  );
+  const linkedEvidence = Array.from({ length: 8 }, (_, index) => ({
+    id: `s${index}`,
+    url: index === 0 ? url : `https://example.com/song/${index}`,
+    title: `Blue Song source ${index}`,
+    content: `Blue Song official description ${index}. ${index ? url : ""}`,
+  }));
+  const selected = {
+    ...researchJob(version),
+    version_id: version.id,
+    stage: "metadata" as const,
+    analysis: {
+      recordings: [
+        {
+          title: "Blue Song",
+          reference_url: url,
+          kind: "original" as const,
+          source_id: "s0",
+          quote: "Blue Song",
+          credits: [],
+          tags: [],
+        },
+      ],
+      raw_model: "{}",
+      review_warnings: [],
+    },
+    evidence: linkedEvidence,
+    candidates: [{ ...version, work_title: version.title, credits: [] }],
+    metadata_cursor: 0,
+    metadata_source_cursor: 0,
+  };
+  await insert("research_jobs", selected);
+
+  const countInvocation = async () => {
+    let count = 0;
+    const measured = new Proxy(db, {
+      get(t, key) {
+        if (key === "prepare")
+          return (sql: string) => {
+            const statement = t.prepare(sql);
+            function wrap(s: D1PreparedStatement): D1PreparedStatement {
+              return new Proxy(s, {
+                get(t, k) {
+                  if (k === "bind")
+                    return (...args: unknown[]) => wrap(t.bind(...args));
+                  const fn = Reflect.get(t, k);
+                  if (["first", "all", "run", "raw"].includes(String(k)))
+                    return (...args: unknown[]) => {
+                      count++;
+                      return fn.apply(t, args);
+                    };
+                  return typeof fn === "function" ? fn.bind(t) : fn;
+                },
+              });
+            }
+            return wrap(statement);
+          };
+        if (key === "batch")
+          return (statements: D1PreparedStatement[]) => {
+            count += statements.length;
+            return t.batch(statements);
+          };
+        const value = Reflect.get(t, key);
+        return typeof value === "function" ? value.bind(t) : value;
+      },
+    });
+    await run({ ...env(), DB: measured }, undefined, provider);
+    expect(count).toBeLessThanOrEqual(50);
+    return count;
+  };
+
+  expect(await countInvocation()).toBeGreaterThan(0);
+  let job = (await allRows(db, "research_jobs"))[0];
+  expect(job.metadata_cursor).toBe(0);
+  expect(job.metadata_source_cursor).toBe(4);
+  expect(await allRows(db, "sources")).toHaveLength(4);
+
+  await wake();
+  expect(await countInvocation()).toBeGreaterThan(0);
+  job = (await allRows(db, "research_jobs"))[0];
+  expect(job.metadata_cursor).toBe(1);
+  expect(job.metadata_source_cursor).toBe(0);
+  expect(await allRows(db, "sources")).toHaveLength(8);
+});
 it("publishes the safe provider failure in administrator usage status", async () => {
   await answer();
   groqStatus = 503;
@@ -1174,7 +1350,7 @@ it.each([
     ),
   ).not.toThrow();
 });
-it("fits three allowed Japanese sources with all 50 tags before inference transport", async () => {
+it("fits three Japanese sources and sends only evidence-backed candidates from the fifty-tag dictionary", async () => {
   await answer();
   const vurls = [
     url,
@@ -1182,11 +1358,19 @@ it("fits three allowed Japanese sources with all 50 tags before inference transp
     "https://www.youtube.com/watch?v=123456789ab",
   ];
   const contents = vurls.map(() =>
-    (
-      "Blue Song official. Vocal: Alice. " +
-      "これは公式の日本語の曲紹介です。".repeat(80)
-    ).slice(0, 600),
+    [
+      "Blue Song official",
+      "Vocal: Alice",
+      "Genre: electronic dance-pop with synth-led production.",
+      "A bright and bouncy rhythm moves at a fast tempo.",
+      "The clear and transparent vocals carry a warm tone.",
+      "The lyrics describe love and hope for tomorrow.",
+      "これは公式の曲紹介です。".repeat(15),
+    ].join("\n\n"),
   );
+  const { recordingWindows } = await import("../src/research/providers");
+  expect(recordingWindows(contents[0])).toContain("electronic dance-pop");
+  expect(recordingWindows(contents[0])).toContain("bright and bouncy rhythm");
   model.recordings[0].credits = [
     {
       name: "Alice",
@@ -1199,6 +1383,8 @@ it("fits three allowed Japanese sources with all 50 tags before inference transp
   ];
   model.recordings[0].tags = [];
   let sent = 0;
+  let observedInput: any;
+  let observedEstimate = 0;
   const f = (async (i: any, b: any) => {
     if (String(i).endsWith("/search"))
       return json({
@@ -1215,26 +1401,41 @@ it("fits three allowed Japanese sources with all 50 tags before inference transp
     if (String(i).endsWith("/completions")) {
       sent++;
       const request = JSON.parse(b.body);
-      const input = JSON.parse(request.messages[1].content);
-      expect(input.tags).toHaveLength(50);
-      const estimate =
+      observedInput = JSON.parse(request.messages[1].content);
+      observedEstimate =
         256 +
         Array.from(b.body as string).reduce(
           (n, c) => n + (c.charCodeAt(0) > 127 ? 2 : 1 / 3),
           0,
         ) +
         request.max_completion_tokens;
-      expect(estimate).toBeLessThanOrEqual(7600);
-      for (const e of input.sources)
-        expect(contents[Number(e.id.slice(1))].startsWith(e.content)).toBe(
-          true,
-        );
     }
     return provider(i, b);
   }) as typeof fetch;
   await drain(0);
   for (let i = 0; i < 25; i++) await run(env(), undefined, f);
   expect(sent).toBe(1);
+  expect(await allRows(db, "tags")).toHaveLength(50);
+  expect(observedInput.tags.map((tag: any) => tag.id)).toEqual(
+    expect.arrayContaining([
+      "tag-07",
+      "tag-13",
+      "tag-24",
+      "tag-32",
+      "tag-33",
+      "tag-38",
+      "tag-47",
+    ]),
+  );
+  expect(observedInput.tags.length).toBeLessThan(50);
+  expect(observedEstimate).toBeLessThanOrEqual(7600);
+  const fullEvidence = observedInput.sources.find((source: any) => source.id === "s0");
+  expect(fullEvidence.content).toContain("Genre: electronic dance-pop");
+  expect(fullEvidence.content).toContain("A bright and bouncy rhythm");
+  expect(fullEvidence.content).toContain("clear and transparent vocals");
+  expect(fullEvidence.content).toContain("lyrics describe love and hope");
+  for (const source of observedInput.sources)
+    expect(source.content).toContain("Vocal: Alice");
   expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
   const snapshots = await allRows(db, "sources");
   expect(snapshots[0].excerpt).toContain("Vocal: Alice");
@@ -1631,6 +1832,10 @@ it("preserves late song-credit windows and exact retrieved header when lyrics do
     canonical = `https://www.youtube.com/watch?v=${song.id}`;
   await answer(song.title, canonical);
   const raw = `Description\n${"歌詞の行です\n".repeat(180)}Vocal: isui\nMusic: raku\nbright and refreshing pop dance tune\nTranscript\n[0:01] ${"music ".repeat(100)}`;
+  const { recordingWindows } = await import("../src/research/providers");
+  const initialWindow = recordingWindows(raw);
+  expect(initialWindow).toContain("Vocal: isui");
+  expect(initialWindow).toContain("bright and refreshing pop dance tune");
   const f = liveFixture(song, {
     raw,
     analysis: {
@@ -2529,8 +2734,8 @@ it.each([
     const source = (await allRows(db, "sources")).find(
       (s) => s.id === credit.source_id,
     )!;
-    expect(source.excerpt).toContain(
-      `${c.header}\nBob\n${c.section}\nMusic: Carol`,
+    expect(source.excerpt.replace(/\s+/g, " ")).toContain(
+      `${c.header} Bob ${c.section} Music: Carol`.replace(/\s+/g, " "),
     );
   },
 );
@@ -2832,12 +3037,12 @@ it("investigates missing descriptors with a bounded Japanese metadata query and 
     return fixture(i, init);
   }) as typeof fetch;
   await measuredLiveDrain(f, 38);
-  expect(searches).toBe(2);
+  expect(searches).toBe(4);
   expect(lookupBodies[1].query).toContain(song.author);
   expect(lookupBodies[1].query).not.toContain("youtube.com");
   expect(lookupBodies[1].query.length).toBeLessThanOrEqual(399);
   expect((await allRows(db, "tag_assignments"))[0]?.tag_id).toBe("tag-08");
-  expect((await allRows(db, "usage"))[0].tavily_credits).toBe(4);
+  expect((await allRows(db, "usage"))[0].tavily_credits).toBe(8);
 });
 
 it.each(["quota", "provider"])(
@@ -2869,15 +3074,27 @@ it.each(["quota", "provider"])(
       return fixture(i, init);
     }) as typeof fetch;
     await measuredLiveDrain(f, 38);
+    if (mode === "provider") {
+      const retrying = (await allRows(db, "research_jobs"))[0];
+      expect(retrying).toMatchObject({
+        stage: "describe_search",
+        status: "queued",
+        last_error: "PROVIDER_HTTP_503",
+      });
+      expect(Date.parse(retrying.next_attempt_at)).toBeGreaterThan(Date.now());
+      await wake();
+      await measuredLiveDrain(f, 38);
+    }
     expect(
       (await allRows(db, "responses")).find((x) => x.id === r.id)?.version_id,
     ).toBeTruthy();
     expect(
       (await allRows(db, "credits")).some((c) => c.role === "uploader"),
     ).toBe(true);
-    expect(
-      (await allRows(db, "research_results"))[0].review_warnings,
-    ).toContain("DESCRIPTIVE_LOOKUP_UNAVAILABLE");
+    const warnings = (await allRows(db, "research_results"))[0].review_warnings;
+    if (mode === "quota")
+      expect(warnings).toContain("DESCRIPTIVE_LOOKUP_UNAVAILABLE");
+    else expect(warnings).not.toContain("DESCRIPTIVE_LOOKUP_UNAVAILABLE");
   },
 );
 
@@ -3113,10 +3330,10 @@ it.each([0, 1])(
         job.id,
       )
       .run();
-    let searches = 0;
+    const searchQueries: string[] = [];
     const f = (async (i: any, init: any) => {
       if (String(i).endsWith("/search")) {
-        searches++;
+        searchQueries.push(JSON.parse(init.body).query);
         return json({ results: [] });
       }
       if (String(i).includes("api.groq.com"))
@@ -3124,10 +3341,22 @@ it.each([0, 1])(
       return provider(i, init);
     }) as typeof fetch;
     await measuredLiveDrain(f, 38);
-    expect(searches).toBe(1);
+    expect(searchQueries).toHaveLength(4);
+    expect(searchQueries.some((query) => query.includes("ジャンル 音楽性"))).toBe(
+      true,
+    );
+    expect(searchQueries.some((query) => query.includes("曲調 雰囲気"))).toBe(
+      true,
+    );
+    expect(searchQueries.some((query) => query.includes("歌声 歌唱"))).toBe(
+      true,
+    );
+    expect(searchQueries.some((query) => query.includes("歌詞 内容"))).toBe(
+      true,
+    );
     expect(
       (await allRows(db, "research_results"))[0].review_warnings,
-    ).toContain("NO_SUPPORTED_TAG_DESCRIPTIONS");
+    ).not.toContain("NO_SUPPORTED_TAG_DESCRIPTIONS");
     expect((await allRows(db, "responses"))[0].version_id).toBeTruthy();
   },
 );
@@ -3312,4 +3541,1067 @@ it.each([
   { role: "vocalist", name: "alice smith", quote: "Vocal: alice smith" },
 ])("preserves shared complete named credit value $quote", (c) => {
   expect(explicitCredit(c.quote, c.name, c.role as CreditRole)).toBe(true);
+});
+
+it("re-extracts a duplicate source for its selected descriptor category and retains its identity", async () => {
+  const work = newRow({ title: "Blue Song", manual_lock: false });
+  const version: Version = newRow({
+    work_id: work.id,
+    title: "Blue Song",
+    kind: "original",
+    reference_url: url,
+    uploader_entity_id: null,
+    research_status: "queued",
+    manual_lock: false,
+  });
+  await insert("works", work);
+  await insert("versions", version);
+  const selected = {
+    ...researchJob(version),
+    version_id: version.id,
+    purpose: "tag_enrichment" as const,
+    query: { title: "Blue Song", artist_hint: null, reference_url: url },
+    stage: "describe_search" as const,
+    descriptive_category: "mood_energy_tempo",
+    descriptive_coverage: { genre_sound: "complete" as const },
+    evidence: [
+      {
+        id: "s0",
+        url,
+        title: "Blue Song official",
+        content: [
+          "Blue Song official.",
+          "Vocal: Alice",
+          "Blue Song is performed by a human vocalist.",
+          ...Array.from(
+            { length: 18 },
+            (_, index) =>
+              `The music has a bright, steady arrangement in section ${index}.`,
+          ),
+        ].join("\n\n"),
+        metadata: {
+          provider: "youtube_oembed" as const,
+          endpoint:
+            "https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabcdefghijk&format=json",
+          title: "Blue Song",
+          author_name: "Singer",
+        },
+      },
+    ],
+    status: "queued" as const,
+  };
+  await insert("research_jobs", selected);
+
+  const searchQueries: string[] = [];
+  const extractedUrls: string[][] = [];
+  let metadataLookups = 0;
+  const f = (async (input: any, init: any) => {
+    const target = String(input);
+    if (target.endsWith("/usage"))
+      return json({
+        account: {
+          current_plan: "Researcher",
+          plan_usage: 0,
+          plan_limit: 1000,
+          paygo_usage: 0,
+        },
+        key: { usage: 0, limit: 1000 },
+      });
+    if (target.endsWith("/search")) {
+      const body = JSON.parse(init.body);
+      searchQueries.push(body.query);
+      return json({
+        results: [
+          {
+            url,
+            title: "Blue Song single notes",
+            content: "Blue Song is bright, steady, and danceable at 120 BPM.",
+            recording_associations: [
+              {
+                provenance: "worker_verified_release_v1",
+                reference_url: url,
+                basis: "official_release",
+                artist: "Singer",
+                title_quote: "Blue Song is an official single release.",
+                release_url: "https://singer.lnk.to/Blue-Song",
+              },
+            ],
+          },
+        ],
+      });
+    }
+    if (target.endsWith("/extract")) {
+      const body = JSON.parse(init.body);
+      extractedUrls.push(body.urls);
+      return json({
+        results: [
+          {
+            url,
+            raw_content:
+              "Blue Song single notes. The music is bright, steady, and danceable at 120 BPM.",
+          },
+        ],
+      });
+    }
+    if (target.includes("youtube.com/oembed")) {
+      metadataLookups++;
+      return json({ title: "Blue Song", author_name: "Singer" });
+    }
+    return json({});
+  }) as typeof fetch;
+
+  await run(env(), undefined, f);
+  let job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("describe_extract");
+  expect(job.descriptive_category).toBe("mood_energy_tempo");
+  expect(job.descriptive_source_ids).toEqual(["s0"]);
+  expect(job.evidence?.map((source) => source.id)).toEqual(["s0"]);
+  expect(job.evidence?.[0].recording_associations).toBeUndefined();
+  expect(job.evidence?.[0].title).toBe("Blue Song official");
+  expect(job.evidence?.[0].metadata?.title).toBe("Blue Song");
+  expect(job.evidence?.[0].content).toContain(
+    "Blue Song is performed by a human vocalist.",
+  );
+  expect(job.evidence?.[0].content).toContain(
+    "Blue Song is bright, steady, and danceable at 120 BPM.",
+  );
+  expect(searchQueries[0]).toContain("曲調");
+
+  await run(env(), undefined, f);
+  job = (await allRows(db, "research_jobs"))[0];
+  expect(extractedUrls).toEqual([[url]]);
+  expect(job.evidence?.[0].id).toBe("s0");
+  expect(job.evidence?.[0].content).toContain(
+    "The music is bright, steady, and danceable at 120 BPM.",
+  );
+  expect(job.evidence?.[0].content).toContain(
+    "Blue Song is performed by a human vocalist.",
+  );
+  expect(job.evidence?.[0].title).toBe("Blue Song official");
+  expect(job.evidence?.[0].metadata?.title).toBe("Blue Song");
+  expect(job.descriptive_coverage).toMatchObject({
+    genre_sound: "complete",
+    mood_energy_tempo: "complete",
+  });
+  expect(metadataLookups).toBe(0);
+  expect((await allRows(db, "usage"))[0].tavily_credits).toBe(2);
+});
+
+it.each([
+  { name: "Alice", role: "vocalist", quote: "Vocal: Alice" },
+  { name: "Bob", role: "composer", quote: "Music: Bob" },
+])(
+  "keeps a fresh Description $role when its quote matches an old Channel value",
+  async (credit) => {
+    const work = newRow({ title: "Blue Song", manual_lock: false });
+    const version: Version = newRow({
+      work_id: work.id,
+      title: "Blue Song",
+      kind: "original",
+      reference_url: url,
+      uploader_entity_id: null,
+      research_status: "queued",
+      manual_lock: false,
+    });
+    await insert("works", work);
+    await insert("versions", version);
+    const selected = {
+      ...researchJob(version),
+      version_id: version.id,
+      purpose: "tag_enrichment" as const,
+      query: { title: "Blue Song", artist_hint: null, reference_url: url },
+      stage: "describe_extract" as const,
+      descriptive_category: "genre_sound" as const,
+      descriptive_source_ids: ["s0"],
+      evidence: [
+        {
+          id: "s0",
+          url,
+          title: "Blue Song official",
+          content: `Blue Song official.\n\nChannel:\n\n${credit.quote}`,
+          metadata: {
+            provider: "youtube_oembed" as const,
+            endpoint:
+              "https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabcdefghijk&format=json",
+            title: "Blue Song",
+            author_name: credit.quote,
+          },
+        },
+      ],
+      status: "queued" as const,
+    };
+    await insert("research_jobs", selected);
+    const fetcher = (async (input: any) => {
+      const target = String(input);
+      if (target.endsWith("/usage"))
+        return json({
+          account: {
+            current_plan: "Researcher",
+            plan_usage: 0,
+            plan_limit: 1000,
+            paygo_usage: 0,
+          },
+          key: { usage: 0, limit: 1000 },
+        });
+      if (target.endsWith("/extract"))
+        return json({
+          results: [{ url, raw_content: `Description\n${credit.quote}` }],
+        });
+      return json({});
+    }) as typeof fetch;
+
+    await run(env(), undefined, fetcher);
+    const job = (await allRows(db, "research_jobs"))[0];
+    const mergedSource = job.evidence![0];
+    const { contentWithoutMetadata, supportedAnalysis } = await import(
+      "../src/research/providers"
+    );
+    const body = contentWithoutMetadata(mergedSource);
+    expect(body.match(new RegExp(credit.quote.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(2);
+    expect(body).toMatch(/Channel\s*:\s*Vocal: Alice|Channel\s*:\s*Music: Bob/);
+    expect(body).toMatch(/Description\s+Vocal: Alice|Description\s+Music: Bob/);
+    const analysis = supportedAnalysis(
+      JSON.stringify({
+        recordings: [
+          {
+            title: "Blue Song",
+            reference_url: url,
+            kind: "original",
+            source_id: "s0",
+            quote: "Blue Song official",
+            credits: [
+              {
+                name: credit.name,
+                kind: "person",
+                role: credit.role,
+                source_id: "s0",
+                quote: credit.quote,
+                aliases: [],
+              },
+            ],
+            tags: [],
+          },
+        ],
+      }),
+      job.evidence!,
+      { title: "Blue Song", artist_hint: null, reference_url: url },
+      [],
+    );
+    expect(analysis.recordings[0].credits[0]).toMatchObject({
+      name: credit.name,
+      role: credit.role,
+    });
+  },
+);
+
+it("marks an empty group once and searches the next missing category independently", async () => {
+  const work = newRow({ title: "Blue Song", manual_lock: false });
+  const version: Version = newRow({
+    work_id: work.id,
+    title: "Blue Song",
+    kind: "original",
+    reference_url: url,
+    uploader_entity_id: null,
+    research_status: "queued",
+    manual_lock: false,
+  });
+  await insert("works", work);
+  await insert("versions", version);
+  const selected = {
+    ...researchJob(version),
+    purpose: "tag_enrichment" as const,
+    query: { title: "Blue Song", artist_hint: null, reference_url: url },
+    stage: "infer" as const,
+    descriptive_coverage: { genre_sound: "complete" as const },
+    evidence: [
+      {
+        id: "s0",
+        url,
+        title: "Blue Song lyrics",
+        content: "The lyrics describe lost love and hope.",
+      },
+    ],
+  };
+  await insert("research_jobs", selected);
+  const queries: string[] = [];
+  const f = (async (input: any, init: any) => {
+    const target = String(input);
+    if (target.endsWith("/usage"))
+      return json({
+        account: {
+          current_plan: "Researcher",
+          plan_usage: 0,
+          plan_limit: 1000,
+          paygo_usage: 0,
+        },
+        key: { usage: 0, limit: 1000 },
+      });
+    if (target.endsWith("/search")) {
+      queries.push(JSON.parse(init.body).query);
+      return json({ results: [] });
+    }
+    return json({});
+  }) as typeof fetch;
+
+  await run(env(), undefined, f);
+  let job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("describe_search");
+  expect(job.descriptive_category).toBe("mood_energy_tempo");
+
+  await run(env(), undefined, f);
+  job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("infer");
+  expect(job.descriptive_coverage).toMatchObject({
+    genre_sound: "complete",
+    mood_energy_tempo: "complete",
+  });
+
+  await run(env(), undefined, f);
+  job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("describe_search");
+  expect(job.descriptive_category).toBe("voice");
+  expect(queries).toHaveLength(1);
+  expect(queries[0]).toContain("BPM");
+});
+
+it("retries a 429 in the same descriptor group before marking it complete", async () => {
+  const work = newRow({ title: "Blue Song", manual_lock: false });
+  const version: Version = newRow({
+    work_id: work.id,
+    title: "Blue Song",
+    kind: "original",
+    reference_url: url,
+    uploader_entity_id: null,
+    research_status: "queued",
+    manual_lock: false,
+  });
+  await insert("works", work);
+  await insert("versions", version);
+  const selected = {
+    ...researchJob(version),
+    purpose: "tag_enrichment" as const,
+    query: { title: "Blue Song", artist_hint: null, reference_url: url },
+    stage: "describe_search" as const,
+    descriptive_category: "mood_energy_tempo",
+    descriptive_coverage: { genre_sound: "complete" as const },
+    evidence: [{ id: "s0", url, title: "Blue Song", content: "Blue Song." }],
+  };
+  await insert("research_jobs", selected);
+  const searchQueries: string[] = [];
+  let searchCount = 0;
+  const f = (async (input: any, init: any) => {
+    const target = String(input);
+    if (target.endsWith("/usage"))
+      return json({
+        account: {
+          current_plan: "Researcher",
+          plan_usage: 0,
+          plan_limit: 1000,
+          paygo_usage: 0,
+        },
+        key: { usage: 0, limit: 1000 },
+      });
+    if (target.endsWith("/search")) {
+      searchQueries.push(JSON.parse(init.body).query);
+      if (++searchCount === 1) return json({ error: "cool down" }, 429);
+      return json({ results: [] });
+    }
+    return json({});
+  }) as typeof fetch;
+
+  await run(env(), undefined, f);
+  let job = (await allRows(db, "research_jobs"))[0];
+  expect(job).toMatchObject({
+    status: "queued",
+    stage: "describe_search",
+    descriptive_category: "mood_energy_tempo",
+    attempts: 1,
+  });
+  expect(job.descriptive_coverage).toEqual({ genre_sound: "complete" });
+
+  await wake();
+  await run(env(), undefined, f);
+  job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("infer");
+  expect(job.descriptive_coverage).toEqual({
+    genre_sound: "complete",
+    mood_energy_tempo: "complete",
+  });
+  expect(searchQueries).toHaveLength(2);
+  expect(searchQueries[1]).toBe(searchQueries[0]);
+});
+
+it("keeps the global 429 retry window after a descriptor group becomes unavailable", async () => {
+  const work = await insert(
+    "works",
+    newRow({ title: "Blue Song", manual_lock: false }),
+  );
+  const version = await insert(
+    "versions",
+    newRow({
+      work_id: work.id,
+      title: "Blue Song",
+      kind: "original",
+      reference_url: url,
+      uploader_entity_id: null,
+      research_status: "queued",
+      manual_lock: false,
+    }),
+  );
+  const selected = {
+    ...researchJob(version),
+    purpose: "tag_enrichment" as const,
+    query: { title: "Blue Song", artist_hint: null, reference_url: url },
+    stage: "describe_search" as const,
+    descriptive_category: "mood_energy_tempo",
+    descriptive_coverage: { genre_sound: "complete" as const },
+    attempts: 3,
+    next_attempt_at: "2000-01-01T00:00:00Z",
+    evidence: [{ id: "s0", url, title: "Blue Song", content: "Blue Song." }],
+  };
+  await insert("research_jobs", selected);
+  let searches = 0;
+  const f = (async (input: any) => {
+    const target = String(input);
+    if (target.endsWith("/usage"))
+      return json({
+        account: {
+          current_plan: "Researcher",
+          plan_usage: 0,
+          plan_limit: 1000,
+          paygo_usage: 0,
+        },
+        key: { usage: 0, limit: 1000 },
+      });
+    if (target.endsWith("/search")) {
+      searches++;
+      return new Response(JSON.stringify({ error: "cool down" }), {
+        status: 429,
+        headers: { "Content-Type": "application/json", "Retry-After": "120" },
+      });
+    }
+    return json({});
+  }) as typeof fetch;
+
+  const attemptedAt = Date.now();
+  await run(env(), undefined, f);
+  let job = (await allRows(db, "research_jobs"))[0];
+  expect(job).toMatchObject({
+    stage: "infer",
+    descriptive_status: "unavailable",
+    descriptive_coverage: {
+      genre_sound: "complete",
+      mood_energy_tempo: "unavailable",
+    },
+    last_error: "PROVIDER_HTTP_429",
+  });
+  expect(Date.parse(job.next_attempt_at) - attemptedAt).toBeGreaterThan(900_000);
+  expect(searches).toBe(1);
+
+  await wake();
+  await run(env(), undefined, f);
+  job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("describe_search");
+  expect(job.descriptive_category).toBe("voice");
+  expect(searches).toBe(1);
+});
+
+it("marks a terminal descriptor failure unavailable and continues with another group", async () => {
+  const work = newRow({ title: "Blue Song", manual_lock: false });
+  const version: Version = newRow({
+    work_id: work.id,
+    title: "Blue Song",
+    kind: "original",
+    reference_url: url,
+    uploader_entity_id: null,
+    research_status: "queued",
+    manual_lock: false,
+  });
+  await insert("works", work);
+  await insert("versions", version);
+  const selected = {
+    ...researchJob(version),
+    purpose: "tag_enrichment" as const,
+    query: { title: "Blue Song", artist_hint: null, reference_url: url },
+    stage: "describe_search" as const,
+    descriptive_category: "mood_energy_tempo",
+    descriptive_coverage: { genre_sound: "complete" as const },
+    evidence: [{ id: "s0", url, title: "Blue Song", content: "Blue Song." }],
+  };
+  await insert("research_jobs", selected);
+  const f = (async (input: any) => {
+    const target = String(input);
+    if (target.endsWith("/usage"))
+      return json({
+        account: {
+          current_plan: "Researcher",
+          plan_usage: 0,
+          plan_limit: 1000,
+          paygo_usage: 0,
+        },
+        key: { usage: 0, limit: 1000 },
+      });
+    if (target.endsWith("/search"))
+      return json({ error: "invalid search" }, 401);
+    return json({});
+  }) as typeof fetch;
+
+  await run(env(), undefined, f);
+  let job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("infer");
+  expect(job.descriptive_coverage).toMatchObject({
+    genre_sound: "complete",
+    mood_energy_tempo: "unavailable",
+  });
+
+  await run(env(), undefined, f);
+  job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("describe_search");
+  expect(job.descriptive_category).toBe("voice");
+});
+
+it("fits all active tag definitions while retaining evidence for more than five researched tags", async () => {
+  const work = newRow({ title: "Blue Song", manual_lock: false });
+  const version: Version = newRow({
+    work_id: work.id,
+    title: "Blue Song",
+    kind: "original" as const,
+    reference_url: url,
+    uploader_entity_id: null,
+    research_status: "queued" as const,
+    manual_lock: false,
+  });
+  await insert("works", work);
+  await insert("versions", version);
+  const content = [
+    "Blue Song",
+    "The genre combines electronic dance-pop with synth-led production.",
+    "The dreamy and bright mood of the song moves with a light, bouncy rhythm at a fast tempo.",
+    "The clear and transparent vocals carry a warm tone.",
+    "The lyrics describe love and hope for tomorrow.",
+  ].join("\n\n");
+  const selected = {
+    ...researchJob(version),
+    purpose: "tag_enrichment" as const,
+    analysis_version: "2",
+    query: { title: "Blue Song", artist_hint: null, reference_url: url },
+    stage: "infer" as const,
+    descriptive_coverage: {
+      genre_sound: "complete" as const,
+      mood_energy_tempo: "complete" as const,
+      voice: "complete" as const,
+      lyric_theme: "complete" as const,
+    },
+    evidence: [
+      {
+        id: "s0",
+        url,
+        title: "Blue Song",
+        content,
+        metadata: {
+          provider: "youtube_oembed" as const,
+          endpoint:
+            "https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabcdefghijk&format=json",
+          title: "Blue Song",
+          author_name: "Singer",
+        },
+      },
+    ],
+  };
+  await insert("research_jobs", selected);
+
+  const proposedTags = [
+    {
+      tag_id: "tag-07",
+      source_id: "s0",
+      quote: "The genre combines electronic dance-pop with synth-led production.",
+      reasoning:
+        "The genre description identifies electronic production and dance-pop as the song's musical style.",
+    },
+    {
+      tag_id: "tag-08",
+      source_id: "s0",
+      quote: "The genre combines electronic dance-pop with synth-led production.",
+      reasoning:
+        "The genre description explicitly names dance-pop as the combined musical style.",
+    },
+    {
+      tag_id: "tag-13",
+      source_id: "s0",
+      quote: "The dreamy and bright mood of the song",
+      reasoning:
+        "The mood description directly characterizes the song as bright.",
+    },
+    {
+      tag_id: "tag-17",
+      source_id: "s0",
+      quote: "The dreamy and bright mood of the song",
+      reasoning:
+        "The mood description directly characterizes the song as dreamy.",
+    },
+    {
+      tag_id: "tag-24",
+      source_id: "s0",
+      quote: "a light, bouncy rhythm",
+      reasoning:
+        "The rhythm is explicitly described as light and bouncy, supporting the song's energetic performance.",
+    },
+    {
+      tag_id: "tag-32",
+      source_id: "s0",
+      quote: "a fast tempo",
+      reasoning:
+        "The description directly states the song's fast tempo.",
+    },
+    {
+      tag_id: "tag-38",
+      source_id: "s0",
+      quote: "The clear and transparent vocals",
+      reasoning:
+        "The voice description directly identifies a clear and transparent vocal tone.",
+    },
+    {
+      tag_id: "tag-43",
+      source_id: "s0",
+      quote: "The lyrics describe love",
+      reasoning:
+        "The lyrics description identifies love as one of the song's themes.",
+    },
+    {
+      tag_id: "tag-47",
+      source_id: "s0",
+      quote: "hope for tomorrow",
+      reasoning:
+        "The lyrics description identifies hope as one of the song's themes.",
+    },
+  ];
+  const analysis = {
+    recordings: [
+      {
+        title: "Blue Song",
+        reference_url: url,
+        kind: "original",
+        source_id: "s0",
+        quote: "Blue Song",
+        credits: [],
+        tags: proposedTags,
+      },
+    ],
+  };
+  let sent: any;
+  const f = (async (input: any, init: any) => {
+    if (String(input).includes("api.groq.com")) {
+      sent = JSON.parse(init.body);
+      return json({
+        choices: [{ message: { content: JSON.stringify(analysis) } }],
+      });
+    }
+    return json({});
+  }) as typeof fetch;
+
+  await measuredLiveDrain(f, 1);
+  const job = (await allRows(db, "research_jobs"))[0];
+  const { requestTokenEstimate } = await import("../src/research/providers");
+  expect(requestTokenEstimate(sent)).toBeLessThanOrEqual(7600);
+  const userInput = JSON.parse(sent.messages[1].content);
+  expect(userInput.tags.length).toBeLessThan(50);
+  expect(userInput.sources).toEqual(job.evidence);
+  expect(userInput.sources[0].content).toContain(
+    "The genre combines electronic dance-pop with synth-led production.",
+  );
+  expect(job.analysis?.recordings[0].tags.length).toBeGreaterThan(5);
+});
+
+it("publishes a release-article tag through worker association without accepting its credit", async () => {
+  const articleUrl = "https://note.com/eveningmusic/n/single-release";
+  const releaseUrl = "https://tayori.lnk.to/Mirage";
+  const work = newRow({ title: "蜃気楼", manual_lock: false });
+  const version: Version = newRow({
+    work_id: work.id,
+    title: "蜃気楼",
+    kind: "original",
+    reference_url: url,
+    uploader_entity_id: null,
+    research_status: "queued",
+    manual_lock: false,
+  });
+  await insert("works", work);
+  await insert("versions", version);
+  const excluded = newRow({
+    version_id: version.id,
+    tag_id: "tag-32",
+    evidence: "Owner excluded this tag",
+    source_id: null,
+    origin: "participant",
+    confirmed: false,
+    manual_lock: true,
+  });
+  await insert("tag_assignments", excluded);
+  const nativeTitle = "tayori - 蜃気楼";
+  const metadataEndpoint = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+  const selected = {
+    ...researchJob(version),
+    purpose: "tag_enrichment" as const,
+    analysis_version: "2",
+    query: { title: "蜃気楼", artist_hint: null, reference_url: url },
+    stage: "describe_extract" as const,
+    descriptive_category: "genre_sound",
+    descriptive_source_ids: ["s1"],
+    descriptive_coverage: {
+      genre_sound: "complete" as const,
+      mood_energy_tempo: "complete" as const,
+      voice: "complete" as const,
+      lyric_theme: "complete" as const,
+    },
+    evidence: [
+      {
+        id: "s0",
+        url,
+        title: nativeTitle,
+        content: nativeTitle,
+        metadata: {
+          provider: "youtube_oembed" as const,
+          endpoint: metadataEndpoint,
+          title: nativeTitle,
+          author_name: "tayori",
+        },
+      },
+      {
+        id: "s1",
+        url: articleUrl,
+        title: "tayori、新曲「蜃気楼」をリリース",
+        content: "tayori、新曲「蜃気楼」をリリース。",
+      },
+    ],
+  };
+  await insert("research_jobs", selected);
+  const articleRaw = [
+    "## リリース情報",
+    "tayori、新曲「蜃気楼」をリリース。",
+    `配信はこちら: ${releaseUrl}`,
+    "## 楽曲紹介",
+    "電子音を中心とするサウンドとアップテンポなビート。",
+    "Music: Alice",
+  ].join("\n");
+  const analysis = {
+    recordings: [
+      {
+        title: "蜃気楼",
+        reference_url: url,
+        kind: "original",
+        source_id: "s0",
+        quote: "蜃気楼",
+        credits: [
+          {
+            name: "Alice",
+            kind: "person",
+            role: "composer",
+            source_id: "s1",
+            quote: "Music: Alice",
+            aliases: [],
+          },
+        ],
+        tags: [
+          {
+            tag_id: "tag-07",
+            source_id: "s1",
+            quote: "電子音を中心とするサウンド",
+            reasoning:
+              "ジャンル説明で電子音を中心とするサウンドが明示され、電子音楽の特徴を直接裏付ける。",
+          },
+          {
+            tag_id: "tag-32",
+            source_id: "s1",
+            quote: "アップテンポなビート",
+            reasoning:
+              "テンポの説明でアップテンポと明示され、速いテンポの基準に合致する。",
+          },
+        ],
+      },
+    ],
+  };
+  const f = (async (input: any, init: any) => {
+    const target = String(input);
+    if (target.endsWith("/usage"))
+      return json({
+        account: {
+          current_plan: "Researcher",
+          plan_usage: 0,
+          plan_limit: 1000,
+          paygo_usage: 0,
+        },
+        key: { usage: 0, limit: 1000 },
+      });
+    if (target.endsWith("/extract")) {
+      expect(JSON.parse(init.body).urls).toEqual([articleUrl]);
+      return json({ results: [{ url: articleUrl, raw_content: articleRaw }] });
+    }
+    if (target.includes("api.groq.com"))
+      return json({
+        choices: [{ message: { content: JSON.stringify(analysis) } }],
+      });
+    return json({});
+  }) as typeof fetch;
+
+  await measuredLiveDrain(f, 1);
+  let job = (await allRows(db, "research_jobs"))[0];
+  const article = job.evidence?.find((source) => source.id === "s1")!;
+  const { linkedDescriptionRecording, linkedRecording } = await import(
+    "../src/research/providers"
+  );
+  expect(linkedRecording(article, url)).toBe(false);
+  expect(linkedDescriptionRecording(article, url)).toBe(true);
+  expect(article.recording_associations?.[0]).toMatchObject({
+    reference_url: url,
+    basis: "official_release",
+    artist: "tayori",
+    release_url: releaseUrl,
+  });
+
+  await measuredLiveDrain(f, 2);
+  job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("metadata");
+  expect(job.analysis?.recordings[0].tags.map((tag) => tag.tag_id)).toEqual([
+    "tag-07",
+    "tag-32",
+  ]);
+  expect(job.analysis?.recordings[0].credits).toEqual([]);
+  await measuredLiveDrain(f, 5);
+  job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("done");
+  const assignments = await allRows(db, "tag_assignments");
+  expect(assignments.find((tag) => tag.id !== excluded.id)).toMatchObject({
+    tag_id: "tag-07",
+    confirmed: true,
+    source_id: expect.any(String),
+  });
+  expect(assignments.find((tag) => tag.id === excluded.id)).toEqual(excluded);
+  const tagSource = (await allRows(db, "sources")).find(
+    (source) => source.id === assignments.find((tag) => tag.id !== excluded.id)?.source_id,
+  );
+  expect(tagSource?.url).toBe(articleUrl);
+  expect(await allRows(db, "credits")).toHaveLength(0);
+});
+
+it("marks a legacy inference job with the current analysis version before calling Groq", async () => {
+  const work = newRow({ title: "Blue Song", manual_lock: false });
+  const version: Version = newRow({
+    work_id: work.id,
+    title: "Blue Song",
+    kind: "original",
+    reference_url: url,
+    uploader_entity_id: null,
+    research_status: "queued",
+    manual_lock: false,
+  });
+  await insert("works", work);
+  await insert("versions", version);
+  const selected = {
+    ...researchJob(version),
+    purpose: "tag_enrichment" as const,
+    analysis_version: "1",
+    query: { title: "Blue Song", artist_hint: null, reference_url: url },
+    stage: "infer" as const,
+    descriptive_coverage: {
+      genre_sound: "complete" as const,
+      mood_energy_tempo: "complete" as const,
+      voice: "complete" as const,
+      lyric_theme: "complete" as const,
+    },
+    evidence: [
+      {
+        id: "s0",
+        url,
+        title: "Blue Song",
+        content: "Blue Song",
+        metadata: {
+          provider: "youtube_oembed" as const,
+          endpoint:
+            "https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabcdefghijk&format=json",
+          title: "Blue Song",
+          author_name: "Singer",
+        },
+      },
+    ],
+  };
+  await insert("research_jobs", selected);
+  let groqCalls = 0;
+  const f = (async (input: any) => {
+    if (String(input).includes("api.groq.com")) {
+      groqCalls++;
+      return json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                recordings: [
+                  {
+                    title: "Blue Song",
+                    reference_url: url,
+                    kind: "original",
+                    source_id: "s0",
+                    quote: "Blue Song",
+                    credits: [],
+                    tags: [],
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      });
+    }
+    return json({});
+  }) as typeof fetch;
+
+  await run(env(), undefined, f);
+  let job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("infer");
+  expect(job.analysis_version).toBe("2");
+  expect(groqCalls).toBe(0);
+
+  await run(env(), undefined, f);
+  job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("catalog");
+  expect(job.analysis_version).toBe("2");
+  expect(groqCalls).toBe(1);
+});
+
+it("moves a legacy generic descriptor extraction into the independent group cycle", async () => {
+  const work = newRow({ title: "Blue Song", manual_lock: false });
+  const version: Version = newRow({
+    work_id: work.id,
+    title: "Blue Song",
+    kind: "original",
+    reference_url: url,
+    uploader_entity_id: null,
+    research_status: "queued",
+    manual_lock: false,
+  });
+  await insert("works", work);
+  await insert("versions", version);
+  const selected = {
+    ...researchJob(version),
+    purpose: "tag_enrichment" as const,
+    query: { title: "Blue Song", artist_hint: null, reference_url: url },
+    stage: "describe_extract" as const,
+    descriptive_status: "complete" as const,
+    descriptive_source_ids: ["s1"],
+    evidence: [
+      {
+        id: "s0",
+        url,
+        title: "Blue Song",
+        content: "Blue Song",
+        metadata: {
+          provider: "youtube_oembed" as const,
+          endpoint:
+            "https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabcdefghijk&format=json",
+          title: "Blue Song",
+          author_name: "Singer",
+        },
+      },
+      {
+        id: "s1",
+        url: "https://example.com/blue-song",
+        title: "Blue Song description",
+        content: "Blue Song older generic description result.",
+      },
+    ],
+  };
+  await insert("research_jobs", selected);
+  let searches = 0;
+  let extracts = 0;
+  const f = (async (input: any, init: any) => {
+    const target = String(input);
+    if (target.endsWith("/usage"))
+      return json({
+        account: {
+          current_plan: "Researcher",
+          plan_usage: 0,
+          plan_limit: 1000,
+          paygo_usage: 0,
+        },
+        key: { usage: 0, limit: 1000 },
+      });
+    if (target.endsWith("/extract")) {
+      extracts++;
+      expect(JSON.parse(init.body).urls).toEqual([
+        "https://example.com/blue-song",
+      ]);
+      return json({
+        results: [
+          {
+            url: "https://example.com/blue-song",
+            raw_content: "Blue Song older generic description result.",
+          },
+        ],
+      });
+    }
+    if (target.endsWith("/search")) {
+      searches++;
+      return json({ results: [] });
+    }
+    return json({});
+  }) as typeof fetch;
+
+  await run(env(), undefined, f);
+  let job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("infer");
+  expect(job.descriptive_status).toBe("complete");
+  expect(job.descriptive_coverage).toBeUndefined();
+  expect(extracts).toBe(1);
+
+  await run(env(), undefined, f);
+  job = (await allRows(db, "research_jobs"))[0];
+  expect(job.stage).toBe("describe_search");
+  expect(job.descriptive_category).toBe("genre_sound");
+  expect(searches).toBe(0);
+});
+
+it.each([
+  { label: "old completed job", analysis_version: "1", status: "complete", automatic: true, queued: true },
+  { label: "current completed job", analysis_version: "2", status: "complete", automatic: true, queued: false },
+  { label: "active current job", analysis_version: "2", status: "queued", automatic: true, queued: false },
+  { label: "manual refresh", analysis_version: "2", status: "complete", automatic: false, queued: true },
+])("$label tag research queueing follows the analysis version", async (scenario) => {
+  const version: Version = newRow({
+    work_id: "work-1",
+    title: "Blue Song",
+    kind: "original",
+    reference_url: url,
+    uploader_entity_id: null,
+    research_status: "complete",
+    manual_lock: true,
+  });
+  const old = {
+    ...researchJob(version),
+    stage: "done" as const,
+    purpose: "tag_enrichment" as const,
+    analysis_version: scenario.analysis_version,
+    status: scenario.status as ResearchJob["status"],
+    descriptive_status: "complete" as const,
+    descriptive_source_ids: ["s1"],
+    descriptive_category: "lyric_theme",
+    descriptive_coverage: { lyric_theme: "complete" as const },
+  };
+  await insert("research_jobs", old);
+  const changes: any[] = [];
+
+  await queueTagResearch(env(), version, changes, scenario.automatic);
+
+  const queued = changes.find((change) => change.table === "research_jobs")?.after;
+  expect(Boolean(queued)).toBe(scenario.queued);
+  if (scenario.queued) {
+    expect(queued).toMatchObject({
+      status: "queued",
+      stage: "search",
+      purpose: "tag_enrichment",
+      analysis_version: "2",
+    });
+    expect(queued.descriptive_status).toBeUndefined();
+    expect(queued.descriptive_source_ids).toBeUndefined();
+    expect(queued.descriptive_category).toBeUndefined();
+    expect(queued.descriptive_coverage).toBeUndefined();
+  }
 });

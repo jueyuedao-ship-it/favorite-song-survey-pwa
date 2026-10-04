@@ -171,5 +171,23 @@ it("classifies source quality for evidence display", () => {
         },
       ],
     }),
+  ).toMatchObject({ tier: "editorial" });
+  expect(
+    researchSourceQuality({
+      id: "s2",
+      url: "https://tayori.lnk.to/Mirage",
+      title: "Mirage official distribution",
+      content: "Digital Single 蜃気楼",
+      recording_associations: [
+        {
+          provenance: "worker_verified_release_v1",
+          reference_url: recordingUrl,
+          basis: "official_release",
+          artist: "tayori",
+          title_quote: "tayori 蜃気楼 single release",
+          release_url: "https://tayori.lnk.to/Mirage",
+        },
+      ],
+    }),
   ).toMatchObject({ tier: "official" });
 });

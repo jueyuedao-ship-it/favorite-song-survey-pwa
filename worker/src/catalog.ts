@@ -293,7 +293,22 @@ export function valuesFor(
     if (current && !("manual_lock" in given)) v.manual_lock = true;
     boolean(v.manual_lock);
   }
-  return Object.fromEntries(fields[table].map((k) => [k, v[k]]));
+  const result = Object.fromEntries(fields[table].map((k) => [k, v[k]]));
+  if (current && table === "tag_assignments")
+    for (const key of [
+      "auto_confirmed",
+      "manual_override",
+      "automatic_evidence",
+      "automatic_source_id",
+      "automatic_evidence_type",
+      "dictionary_version",
+      "research_result_id",
+    ])
+      if (current[key] !== undefined) result[key] = current[key];
+  if (current && table === "sources")
+    for (const key of ["quality_tier", "quality_reason"])
+      if (current[key] !== undefined) result[key] = current[key];
+  return result;
 }
 export function referenceGuards(
   db: D1Database,

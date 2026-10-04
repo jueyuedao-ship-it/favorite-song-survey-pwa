@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import type { CatalogCandidate, Participant, RecordCreate, ResearchStatus } from "../shared/contracts";
 import { todayInJapan } from "./dates";
 import type { PendingRegistration, StoredCredential } from "./storage";
@@ -13,6 +13,7 @@ type Props = {
   online: boolean;
   pendingRegistration?: PendingRegistration;
   onCreateGuest: (name: string, deviceLabel: string) => Promise<void>;
+  onClaimInvite: (inviteUrl: string) => Promise<void>;
   onRetryRegistration: () => Promise<void>;
   onSubmit: (record: Omit<RecordCreate, "operation_id" | "participant_id">, songTitle?: string) => Promise<"cloud" | "queued">;
   onAddDevice: () => Promise<void>;
@@ -33,10 +34,13 @@ function researchStatusName(status: ResearchStatus): string {
   } as Record<ResearchStatus, string>)[status];
 }
 
-export function AnswerPanel({ api, selectedParticipant, credential, pendingCount, online, pendingRegistration, onCreateGuest, onRetryRegistration, onSubmit, onAddDevice }: Props) {
+export function AnswerPanel({ api, selectedParticipant, credential, pendingCount, online, pendingRegistration, onCreateGuest, onClaimInvite, onRetryRegistration, onSubmit, onAddDevice }: Props) {
   const [name, setName] = useState("");
   const [deviceLabel, setDeviceLabel] = useState("この端末");
   const [showRegistration, setShowRegistration] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
+  const [inviteUrl, setInviteUrl] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
   const [title, setTitle] = useState("");
   const [artist, setArtist] = useState("");
   const [referenceUrl, setReferenceUrl] = useState("");
@@ -99,6 +103,20 @@ export function AnswerPanel({ api, selectedParticipant, credential, pendingCount
     finally { setSubmitting(false); }
   }
 
+  async function loginWithInvite(event: FormEvent) {
+    event.preventDefault();
+    setLoggingIn(true);
+    setError("");
+    try {
+      await onClaimInvite(inviteUrl.trim());
+      setInviteUrl("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "アカウントログインに失敗しました。");
+    } finally {
+      setLoggingIn(false);
+    }
+  }
+
   return <section className="answer-layout">
     <div className="answer-card content-panel">
       <div className="section-heading">
@@ -118,11 +136,17 @@ export function AnswerPanel({ api, selectedParticipant, credential, pendingCount
         </> : <>
           {selectedParticipant ? <><h3>{selectedParticipant.name}さんの回答端末</h3><p>名前の切り替えだけでは編集権限は付きません。招待リンクで本人の端末を登録するか、新しい名前で参加できます。</p></>
             : <><h3>はじめての回答</h3><p>参加者名と、この端末だけが使う本人確認情報を登録します。</p></>}
-          {!showRegistration ? <button className="secondary-button" type="button" onClick={() => setShowRegistration(true)}>新しく参加する</button>
-            : <form className="registration-form" onSubmit={(event) => { event.preventDefault(); setError(""); void onCreateGuest(name.trim(), deviceLabel.trim() || "この端末").catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "参加登録できませんでした。")); }}>
+          {!showRegistration && !showLogin ? <div className="button-row">
+            <button className="primary-button" type="button" onClick={() => { setShowLogin(true); setShowRegistration(false); setError(""); }}>アカウントログイン</button>
+            <button className="secondary-button" type="button" onClick={() => { setShowRegistration(true); setShowLogin(false); setError(""); }}>新しく参加する</button>
+          </div> : showLogin ? <form className="registration-form" onSubmit={(event) => void loginWithInvite(event)}>
+            <label>招待リンクを貼り付ける<input aria-label="招待リンク" type="text" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="https://.../#invite=..." required value={inviteUrl} onChange={(event) => setInviteUrl(event.target.value)} /></label>
+            <p className="muted-note">登録済み端末から発行した招待リンクを貼り付けてください。リンク先は開かず、この端末で本人確認だけを行います。</p>
+            <div className="button-row"><button className="primary-button" type="submit" disabled={!online || loggingIn || !inviteUrl.trim()}>{loggingIn ? "ログイン中…" : "ログイン"}</button><button className="quiet-button" type="button" disabled={loggingIn} onClick={() => { setShowLogin(false); setInviteUrl(""); setError(""); }}>戻る</button></div>
+          </form> : <form className="registration-form" onSubmit={(event) => { event.preventDefault(); setError(""); void onCreateGuest(name.trim(), deviceLabel.trim() || "この端末").catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "参加登録できませんでした。")); }}>
             <label>お名前<input autoComplete="nickname" maxLength={80} required value={name} onChange={(event) => setName(event.target.value)} /></label>
             <label>端末の呼び名<input maxLength={80} value={deviceLabel} onChange={(event) => setDeviceLabel(event.target.value)} /></label>
-            <div className="button-row"><button className="primary-button" type="submit">参加登録</button><button className="quiet-button" type="button" onClick={() => setShowRegistration(false)}>戻る</button></div>
+            <div className="button-row"><button className="primary-button" type="submit">参加登録</button><button className="quiet-button" type="button" onClick={() => { setShowRegistration(false); setError(""); }}>戻る</button></div>
           </form>}
         </>}
       </section>}

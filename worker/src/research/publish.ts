@@ -483,14 +483,15 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
             ? assignment.confirmed
             : false;
       const accepted = acceptedTagIds.has(assignment.tag_id);
-      if (!trackedAutomatic && !accepted) continue;
-      const nextAuto = accepted ? true : false;
+      // Accepted tags were already refreshed by their tag task. Reconcile only
+      // an automatic positive decision that disappeared from this research run.
+      if (!trackedAutomatic || accepted || !currentAuto) continue;
       const nextConfirmed =
         manualOverride === "force_on"
           ? true
           : manualOverride === "force_off"
             ? false
-            : nextAuto;
+            : false;
       const automaticEvidence =
         assignment.automatic_evidence ??
         (legacyAutomatic ? assignment.evidence : null);
@@ -498,7 +499,7 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
         assignment.automatic_source_id ??
         (legacyAutomatic ? assignment.source_id : null);
       const next = updated(assignment, {
-        auto_confirmed: nextAuto,
+        auto_confirmed: false,
         manual_override: manualOverride,
         manual_lock: Boolean(manualOverride),
         confirmed: nextConfirmed,
@@ -506,26 +507,17 @@ export async function publishClaim(env: WorkerEnv, j: ResearchJob) {
         research_result_id: result.id,
         automatic_evidence: automaticEvidence,
         automatic_source_id: automaticSourceId,
-        evidence:
-          manualOverride
-            ? assignment.evidence
-            : accepted
-              ? automaticEvidence ?? assignment.evidence
-              : "自動調査：現在の辞書と取得済み根拠では非該当",
-        source_id:
-          manualOverride
-            ? assignment.source_id
-            : accepted
-              ? automaticSourceId
-              : null,
+        evidence: manualOverride
+          ? assignment.evidence
+          : "自動調査：現在の辞書と取得済み根拠では非該当",
+        source_id: manualOverride ? assignment.source_id : null,
         origin: manualOverride ? assignment.origin : "research",
       });
-      if (JSON.stringify(next) !== JSON.stringify(assignment))
-        changes.push({
-          table: "tag_assignments",
-          before: assignment,
-          after: next,
-        });
+      changes.push({
+        table: "tag_assignments",
+        before: assignment,
+        after: next,
+      });
     }
     if (!version.manual_lock)
       changes.push({

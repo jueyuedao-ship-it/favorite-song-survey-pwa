@@ -435,8 +435,9 @@ function exactSongTitleIsSubject(
 function exactArtistMention(text: string, artist: string) {
   const escapedArtist = escapeRegExp(artist.normalize("NFKC").trim());
   if (!escapedArtist) return false;
+  const particles = "はがのとやもをにへで";
   return new RegExp(
-    `(?:^|[^\\p{L}\\p{N}])${escapedArtist}(?=$|[^\\p{L}\\p{N}])`,
+    `(?:^|[^\\p{L}\\p{N}]|[${particles}])${escapedArtist}(?=$|[^\\p{L}\\p{N}]|[${particles}])`,
     "iu",
   ).test(text.normalize("NFKC"));
 }

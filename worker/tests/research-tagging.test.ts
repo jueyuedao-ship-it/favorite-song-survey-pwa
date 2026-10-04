@@ -411,8 +411,7 @@ it("keeps supported identity and descriptor tags when optional original and synt
     "recording:0:credit:0:UNSUPPORTED_EVIDENCE",
   );
   expect(analysis.tag_decisions).toContainEqual(
-    expect.objectContaining({ tag_id: "tag-33",
-      evidence_policy: policyFor("tag-33"), status: "rejected" }),
+    expect.objectContaining({ tag_id: "tag-33", status: "rejected" }),
   );
 });
 

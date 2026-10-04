@@ -3,6 +3,8 @@ import type {
   CreditRole,
   Ranking,
   SurveyRecord,
+  TagCoverageGroup,
+  TagCoverageStatus,
 } from "../../shared/contracts";
 import { allRows, invalid } from "./store";
 export function civilDate(value: unknown) {
@@ -68,6 +70,7 @@ export async function statistics(
     entities,
     tags,
     assignments,
+    researchJobs,
   ] = await Promise.all([
     allRows(db, "responses"),
     allRows(db, "versions"),
@@ -77,6 +80,7 @@ export async function statistics(
     allRows(db, "entities"),
     allRows(db, "tags"),
     allRows(db, "tag_assignments"),
+    allRows(db, "research_jobs"),
   ]);
   const all = responses.filter(
       (r) => !participantId || r.participant_id === participantId,
@@ -141,14 +145,46 @@ export async function statistics(
       }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }
+  const coverageGroups: TagCoverageGroup[] = [
+    "genre_sound",
+    "mood_energy_tempo",
+    "voice",
+    "lyric_theme",
+  ];
+  const coverageByVersion = new Map<
+    string,
+    Record<TagCoverageGroup, TagCoverageStatus>
+  >();
+  for (const version of versions) {
+    const job = researchJobs
+      .filter(
+        (candidate) =>
+          candidate.version_id === version.id &&
+          candidate.purpose === "tag_enrichment",
+      )
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
+    coverageByVersion.set(
+      version.id,
+      Object.fromEntries(
+        coverageGroups.map((group) => [
+          group,
+          job?.descriptive_coverage?.[group] ?? "unknown",
+        ]),
+      ) as Record<TagCoverageGroup, TagCoverageStatus>,
+    );
+  }
+  const coverageOf = (r: SurveyRecord) =>
+    r.version_id
+      ? coverageByVersion.get(r.version_id) ??
+        Object.fromEntries(
+          coverageGroups.map((group) => [group, "unknown"]),
+        ) as Record<TagCoverageGroup, TagCoverageStatus>
+      : Object.fromEntries(
+          coverageGroups.map((group) => [group, "unknown"]),
+        ) as Record<TagCoverageGroup, TagCoverageStatus>;
   const parsed = (r: SurveyRecord) =>
     r.version_id !== null &&
-    assignments.some(
-      (a) =>
-        a.version_id === r.version_id &&
-        a.confirmed &&
-        tags.some((t) => t.id === a.tag_id && t.active),
-    );
+    coverageGroups.every((group) => coverageOf(r)[group] !== "unknown");
   const weekly_tags = Array.from({ length: 12 }, (_, i) => {
     const start = addDays(monday(anchor), (i - 11) * 7),
       end = addDays(start, 6),
@@ -181,6 +217,14 @@ export async function statistics(
         }),
     };
   });
+  const coverage = Object.fromEntries(
+    coverageGroups.map((group) => {
+      const counts = { complete: 0, unavailable: 0, unknown: 0 };
+      for (const record of records)
+        counts[coverageOf(record)[group]]++;
+      return [group, counts];
+    }),
+  ) as Statistics["coverage"];
   return {
     from,
     to,
@@ -190,5 +234,6 @@ export async function statistics(
     rankings,
     roles,
     weekly_tags,
+    coverage,
   };
 }

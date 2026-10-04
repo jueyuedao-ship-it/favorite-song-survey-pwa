@@ -49,7 +49,7 @@ it("a delayed tag save does not close the subsequently opened record editor", as
   });
   render(<HistoryPanel api={createApi(BASE,{fetch:fetcher})} participant={person} credential={identity} online />);
   const buttons=await screen.findAllByRole('button',{name:'編集'});
-  fireEvent.click(buttons[0]);fireEvent.click(await screen.findByRole('checkbox',{name:'ロック'}));
+  fireEvent.click(buttons[0]);fireEvent.change(await screen.findByRole('combobox',{name:'ロック の設定'}),{target:{value:'force_off'}});
   fireEvent.click(screen.getByRole('button',{name:'記録を保存'}));fireEvent.click(buttons[1]);
   await act(async()=>release(result({...record,revision:2})));
   expect(screen.getByText('記録を編集')).toBeInTheDocument();
@@ -64,9 +64,9 @@ it("reopening the same editor resets visible tag choices and their save draft to
   });
   render(<HistoryPanel api={createApi(BASE,{fetch:fetcher})} participant={person} credential={identity} online />);
   fireEvent.click(await screen.findByRole('button',{name:'編集'}));
-  fireEvent.click(await screen.findByRole('checkbox',{name:'ロック'}));expect(screen.getByRole('checkbox',{name:'ロック'})).not.toBeChecked();
+  fireEvent.change(await screen.findByRole('combobox',{name:'ロック の設定'}),{target:{value:'force_off'}});expect(screen.getByRole('combobox',{name:'ロック の設定'})).toHaveValue('force_off');
   fireEvent.click(screen.getByRole('button',{name:'編集'}));
-  await waitFor(()=>expect(screen.getByRole('checkbox',{name:'ロック'})).toBeChecked());
+  await waitFor(()=>expect(screen.getByRole('combobox',{name:'ロック の設定'})).toHaveValue('auto'));
 });
 it("tag editor reloads its saved snapshot when switching back from an unresolved selection", async () => {
   const fetcher=fixture(url=>{
@@ -77,11 +77,11 @@ it("tag editor reloads its saved snapshot when switching back from an unresolved
     throw new Error('Unexpected route');
   });
   render(<HistoryPanel api={createApi(BASE,{fetch:fetcher})} participant={person} credential={identity} online />);
-  fireEvent.click(await screen.findByRole('button',{name:'編集'}));expect(await screen.findByRole('checkbox',{name:'ロック'})).toBeChecked();
-  fireEvent.click(screen.getByRole('button',{name:'未特定の曲名に切り替える'}));expect(screen.queryByRole('checkbox',{name:'ロック'})).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button',{name:'現在の曲を保持'}));expect(await screen.findByRole('checkbox',{name:'ロック'})).toBeChecked();
+  fireEvent.click(await screen.findByRole('button',{name:'編集'}));expect(await screen.findByRole('combobox',{name:'ロック の設定'})).toHaveValue('auto');
+  fireEvent.click(screen.getByRole('button',{name:'未特定の曲名に切り替える'}));expect(screen.queryByRole('combobox',{name:'ロック の設定'})).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'現在の曲を保持'}));expect(await screen.findByRole('combobox',{name:'ロック の設定'})).toHaveValue('auto');
 });
-it("tag checkboxes stay local until record save and send only additions/removals", async () => {
+it("tag overrides stay local until record save and send only changed override states", async () => {
   let saved:any; let saves=0;
   const fetcher=fixture((url,init)=>{
     if(url.pathname.endsWith('/tags'))return result({version_id:'v-old',tags:[
@@ -95,15 +95,15 @@ it("tag checkboxes stay local until record save and send only additions/removals
   });
   render(<HistoryPanel api={createApi(BASE,{fetch:fetcher})} participant={person} credential={identity} online />);
   fireEvent.click(await screen.findByRole('button',{name:'編集'}));
-  fireEvent.click(await screen.findByRole('checkbox',{name:'ロック'}));fireEvent.click(screen.getByRole('checkbox',{name:'切ない'}));
+  fireEvent.change(await screen.findByRole('combobox',{name:'ロック の設定'}),{target:{value:'force_off'}});fireEvent.change(screen.getByRole('combobox',{name:'切ない の設定'}),{target:{value:'force_on'}});
   expect(saves).toBe(0);fireEvent.click(screen.getByRole('button',{name:'閉じる'}));expect(saves).toBe(0);
   fireEvent.click(screen.getByRole('button',{name:'編集'}));
-  expect(await screen.findByRole('checkbox',{name:'ロック'})).toBeChecked();
-  fireEvent.click(screen.getByRole('checkbox',{name:'ロック'}));fireEvent.click(screen.getByRole('checkbox',{name:'切ない'}));
+  expect(await screen.findByRole('combobox',{name:'ロック の設定'})).toHaveValue('auto');
+  fireEvent.change(screen.getByRole('combobox',{name:'ロック の設定'}),{target:{value:'force_off'}});fireEvent.change(screen.getByRole('combobox',{name:'切ない の設定'}),{target:{value:'force_on'}});
   fireEvent.click(screen.getByRole('button',{name:'記録を保存'}));
   await waitFor(()=>expect(saves).toBe(1));
   expect(saved.tag_version_id).toBe('v-old');
-  expect(saved.tag_changes).toEqual([{tag_id:'tag-03',confirmed:false,assignment_id:'assignment-rock',expected_revision:4},{tag_id:'tag-14',confirmed:true,assignment_id:null,expected_revision:null}]);
+  expect(saved.tag_changes).toEqual([{tag_id:'tag-03',override:'force_off',assignment_id:'assignment-rock',expected_revision:4},{tag_id:'tag-14',override:'force_on',assignment_id:null,expected_revision:null}]);
 });
 it("a delayed research start cannot populate a different record editor", async () => {
   let release!: (value: Response) => void;

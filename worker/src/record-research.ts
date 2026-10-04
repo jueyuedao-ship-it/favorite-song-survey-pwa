@@ -7,6 +7,7 @@ import type {
 } from "../../shared/contracts";
 import { ownerOrAdmin } from "./auth";
 import { researchJob, ownRecord, catalogUrl } from "./catalog";
+import { activeTags, tagDictionaryFingerprint } from "./tags";
 import {
   allRows,
   getRow,
@@ -65,6 +66,7 @@ export async function queueTagResearch(
   previous?: SurveyRecord,
 ) {
   const jobs = await allRows(env.DB, "research_jobs", false);
+  const dictionaryVersion = tagDictionaryFingerprint(await activeTags(env.DB));
   const existing = jobs.find((j) => j.version_id === version.id);
   if (
     pending(existing) ||
@@ -72,7 +74,8 @@ export async function queueTagResearch(
       existing &&
       !existing.deleted_at &&
       existing.status === "complete" &&
-      existing.analysis_version === "2")
+      existing.analysis_version === "2" &&
+      existing.dictionary_version === dictionaryVersion)
   )
     return;
   const lookup = previous ? lookupFor(jobs, previous.id) : undefined;
@@ -100,6 +103,7 @@ export async function queueTagResearch(
     analysis_version: "2",
     purpose: "tag_enrichment" as const,
     query,
+    dictionary_version: dictionaryVersion,
     response_revision: undefined,
   };
   const after = existing

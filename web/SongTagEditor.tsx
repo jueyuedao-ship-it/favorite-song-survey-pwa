@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   ManualTagChange,
+  ManualTagOverride,
   SongTagEditorData,
   SurveyRecord,
 } from "../shared/contracts";
@@ -16,6 +17,25 @@ type Props = {
   onDraftChange: (draft: SongTagDraft | undefined) => void;
 };
 
+function overrideOf(
+  tag: SongTagEditorData["tags"][number],
+): ManualTagOverride {
+  if (
+    tag.manual_override === "auto" ||
+    tag.manual_override === "force_on" ||
+    tag.manual_override === "force_off"
+  )
+    return tag.manual_override;
+  return tag.manual_lock
+    ? tag.selected
+      ? "force_on"
+      : "force_off"
+    : "auto";
+}
+function autoSelectedOf(tag: SongTagEditorData["tags"][number]) {
+  return typeof tag.auto_selected === "boolean" ? tag.auto_selected : tag.selected;
+}
+
 export function SongTagEditor({
   api,
   record,
@@ -25,7 +45,9 @@ export function SongTagEditor({
   onDraftChange,
 }: Props) {
   const [data, setData] = useState<SongTagEditorData>();
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [overrides, setOverrides] = useState<Map<string, ManualTagOverride>>(
+    new Map(),
+  );
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const loadedScope = useRef("");
@@ -37,7 +59,7 @@ export function SongTagEditor({
     if (loadedScope.current === scope) return;
     loadedScope.current = "";
     setData(undefined);
-    setSelected(new Set());
+    setOverrides(new Map());
     onDraftChange(undefined);
     setFailed(false);
     setLoading(false);
@@ -55,8 +77,8 @@ export function SongTagEditor({
           throw new Error("Version changed");
         loadedScope.current = scope;
         setData(value);
-        setSelected(
-          new Set(value.tags.filter((t) => t.selected).map((t) => t.id)),
+        setOverrides(
+          new Map(value.tags.map((tag) => [tag.id, overrideOf(tag)])),
         );
         onDraftChange({ version_id: value.version_id, changes: [] });
       })
@@ -80,21 +102,23 @@ export function SongTagEditor({
     onDraftChange,
   ]);
 
-  function toggle(id: string) {
+  function setOverride(id: string, override: ManualTagOverride) {
     if (!data || !online) return;
-    const next = new Set(selected);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelected(next);
+    const next = new Map(overrides);
+    next.set(id, override);
+    setOverrides(next);
     onDraftChange({
       version_id: data.version_id,
       changes: data.tags
-        .filter((t) => next.has(t.id) !== t.selected)
-        .map((t) => ({
-          tag_id: t.id,
-          confirmed: next.has(t.id),
-          assignment_id: t.assignment_id,
-          expected_revision: t.assignment_revision,
+        .filter(
+          (tag) =>
+            (next.get(tag.id) ?? tag.manual_override) !== tag.manual_override,
+        )
+        .map((tag) => ({
+          tag_id: tag.id,
+          override: next.get(tag.id) ?? tag.manual_override,
+          assignment_id: tag.assignment_id,
+          expected_revision: tag.assignment_revision,
         })),
     });
   }
@@ -103,7 +127,7 @@ export function SongTagEditor({
     <fieldset className="manual-tag-editor">
       <legend>タグの手動編集</legend>
       <p className="muted-note">
-        同じ曲の版を登録した全員の表示・統計に反映されます。手動で付け外したタグは自動調査で上書きしません。「記録を保存」で確定します。
+        同じ曲の版を登録した全員の表示・統計に反映されます。「自動」は調査結果に従い、「付ける」「外す」は手動で固定します。後から「自動」に戻せます。「記録を保存」で確定します。
       </p>
       {!valid ? (
         <p>
@@ -125,23 +149,43 @@ export function SongTagEditor({
             <div className="manual-tag-options">
               {data.tags
                 .filter((t) => t.category === category)
-                .map((t) => (
-                  <label
-                    className="manual-tag-choice"
-                    key={t.id}
-                    title={t.criterion}
-                  >
-                    <input
-                      type="checkbox"
-                      aria-label={t.name}
-                      checked={selected.has(t.id)}
-                      disabled={!online}
-                      onChange={() => toggle(t.id)}
-                    />
-                    <span>{t.name}</span>
-                    {t.manual_lock && <small>手動</small>}
-                  </label>
-                ))}
+                .map((t) => {
+                  const override = overrides.get(t.id) ?? overrideOf(t);
+                  const effective =
+                    override === "force_on"
+                      ? true
+                      : override === "force_off"
+                        ? false
+                        : autoSelectedOf(t);
+                  return (
+                    <label
+                      className="manual-tag-choice manual-tag-choice-three-state"
+                      key={t.id}
+                      title={t.criterion}
+                    >
+                      <span>{t.name}</span>
+                      <small>
+                        {effective ? "現在: 付与" : "現在: なし"}
+                        {override === "auto" ? "（自動）" : "（手動）"}
+                      </small>
+                      <select
+                        aria-label={`${t.name} の設定`}
+                        value={override}
+                        disabled={!online}
+                        onChange={(event) =>
+                          setOverride(
+                            t.id,
+                            event.target.value as ManualTagOverride,
+                          )
+                        }
+                      >
+                        <option value="auto">自動</option>
+                        <option value="force_on">付ける</option>
+                        <option value="force_off">外す</option>
+                      </select>
+                    </label>
+                  );
+                })}
             </div>
           </div>
         ))

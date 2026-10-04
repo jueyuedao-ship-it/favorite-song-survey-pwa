@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CatalogCandidate, Page, Participant, RecordCandidates, RecordUpdate, SongDetail, SurveyRecord } from "../shared/contracts";
+import type {
+  CatalogCandidate,
+  Page,
+  Participant,
+  RecordCandidates,
+  RecordUpdate,
+  SongDetail,
+  SurveyRecord,
+  TagCoverageGroup,
+} from "../shared/contracts";
 import { createApi } from "./api";
 import { todayInJapan } from "./dates";
 import { newOperationId } from "./storage";
@@ -9,6 +18,25 @@ import { SongTagEditor, type SongTagDraft } from "./SongTagEditor";
 
 type SurveyApi = ReturnType<typeof createApi>;
 type Props = { api: SurveyApi; participant?: Participant; credential?: StoredCredential; online: boolean };
+
+const coverageLabels: Record<TagCoverageGroup, string> = {
+  genre_sound: "ジャンル・音作り",
+  mood_energy_tempo: "雰囲気・勢い・テンポ",
+  voice: "歌声",
+  lyric_theme: "歌詞テーマ",
+};
+const coverageStatusLabels = {
+  complete: "完了",
+  unavailable: "取得不可",
+  unknown: "未調査",
+} as const;
+const qualityLabels = {
+  official: "公式",
+  platform: "配信/動画プラットフォーム",
+  editorial: "解説記事",
+  community: "コミュニティ",
+  unknown: "品質未分類",
+} as const;
 
 export function HistoryPanel({ api, participant, credential, online }: Props) {
   const [records, setRecords] = useState<SurveyRecord[]>([]);
@@ -269,6 +297,52 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
           {record.reference_url && <a href={record.reference_url} target="_blank" rel="noreferrer">参照ページを開く</a>}
           {record.version_id && <span className="version-pill">曲が特定済み</span>}
         </div>
+        {song && <section className="tag-evidence-panel" aria-label="タグと調査根拠">
+          <div className="tag-coverage-row">
+            {(Object.keys(coverageLabels) as TagCoverageGroup[]).map((group) => (
+              <span className={`coverage-pill coverage-${song.tag_coverage?.[group] ?? "unknown"}`} key={group}>
+                {coverageLabels[group]}: {coverageStatusLabels[song.tag_coverage?.[group] ?? "unknown"]}
+              </span>
+            ))}
+          </div>
+          {song.tags.length ? <div className="tag-evidence-list">
+            {song.tags.map((assignment) => {
+              const source = song.sources.find(
+                (item) =>
+                  item.id ===
+                  (assignment.source_id ?? assignment.automatic_source_id),
+              );
+              const manual =
+                assignment.manual_override === "force_on" ||
+                assignment.manual_override === "force_off" ||
+                assignment.manual_lock;
+              const evidenceType =
+                assignment.automatic_evidence_type === "direct"
+                  ? "direct"
+                  : assignment.automatic_evidence_type === "semantic_inference"
+                    ? "semantic"
+                    : null;
+              return <details className="tag-evidence-item" key={assignment.id}>
+                <summary>
+                  <span>{assignment.tag.name}</span>
+                  <small>{manual ? "手動" : "自動"}{evidenceType ? ` · ${evidenceType}` : ""}</small>
+                </summary>
+                <p>{assignment.evidence}</p>
+                {manual && assignment.automatic_evidence && (
+                  <p className="muted-note">
+                    自動判定の根拠: {assignment.automatic_evidence}
+                  </p>
+                )}
+                {source && <p className="tag-source-meta">
+                  <span>{qualityLabels[source.quality_tier ?? "unknown"]}</span>
+                  <span>{source.quality_reason ?? "品質区分の理由は未記録"}</span>
+                  <span>確認: {new Date(source.checked_at).toLocaleString("ja-JP")}</span>
+                  <a href={source.url} target="_blank" rel="noreferrer">{source.title || "参照元を開く"}</a>
+                </p>}
+              </details>;
+            })}
+          </div> : <p className="muted-note">現在有効なタグはありません。</p>}
+        </section>}
         {own && <div className="history-actions">
           <button type="button" className="quiet-button" disabled={!online} title={!online ? "接続後に利用できます" : undefined} onClick={() => startEdit(record)}>編集</button>
           <button type="button" className="danger-button" disabled={!online} title={!online ? "接続後に利用できます" : undefined} onClick={() => void deleteRecord(record)}>削除</button>

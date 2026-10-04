@@ -2,6 +2,8 @@ import type {
   CreditRole,
   VersionKind,
   RecordingMetadata,
+  SourceQualityTier,
+  TagEvidencePolicy,
 } from "../../../shared/contracts";
 import { catalogUrl } from "../catalog";
 export interface Evidence {
@@ -283,6 +285,60 @@ export function linkedDescriptionRecording(source: Evidence, recording: string) 
   return false;
 }
 
+export function researchSourceQuality(source: Evidence): {
+  tier: SourceQualityTier;
+  reason: string;
+} {
+  let host = "";
+  try {
+    host = new URL(source.url).hostname.toLowerCase();
+  } catch {}
+  const verifiedRelease = source.recording_associations?.find(
+    (association) =>
+      association.provenance === "worker_verified_release_v1" &&
+      association.basis === "official_release",
+  );
+  const lnkArtist = host.endsWith(".lnk.to")
+    ? host.slice(0, -".lnk.to".length)
+    : "";
+  if (
+    verifiedRelease &&
+    lnkArtist &&
+    norm(lnkArtist) === norm(verifiedRelease.artist)
+  )
+    return {
+      tier: "official",
+      reason: "検証済みアーティスト名義の公式配信リンク",
+    };
+  if (
+    host === "open.spotify.com" ||
+    host === "music.apple.com" ||
+    host === "ototoy.jp" ||
+    host === "youtube.com" ||
+    host === "www.youtube.com" ||
+    host === "music.youtube.com"
+  )
+    return {
+      tier: "platform",
+      reason: "配信・動画プラットフォーム上の一次メタデータ/ページ",
+    };
+  if (host === "reddit.com" || host.endsWith(".reddit.com"))
+    return { tier: "community", reason: "コミュニティ投稿" };
+  if (
+    verifiedRelease ||
+    source.recording_associations?.some(
+      (association) => association.provenance === "worker_verified_song_v1",
+    )
+  )
+    return {
+      tier: "editorial",
+      reason: verifiedRelease
+        ? "第三者ページ内の対象曲と公式配信先の対応をWorkerで検証済み"
+        : "対象曲を明示した解説本文をWorkerで曲単位に検証済み",
+    };
+  return { tier: "unknown", reason: "発行主体の品質区分を自動確認できない" };
+}
+
 const cleanRecordingText = (raw: string) => {
   const clean = raw
     .slice(0, 48000)
@@ -354,24 +410,43 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function exactSongTitleIsSubject(text: string, title: string) {
+function exactSongTitleIsSubject(
+  text: string,
+  title: string,
+  artist?: string,
+) {
   const normalized = text.normalize("NFKC");
   const escapedTitle = escapeRegExp(title.normalize("NFKC").trim());
   if (!escapedTitle) return false;
-  // The title must be named as a song, single, track, or recording in the
-  // prose. This prevents a short title such as "Scatman" from matching only
-  // the artist name "Scatman John" or an unrelated title like "Scatman's World".
-  return new RegExp(
-    `(?:^|[^\\p{L}\\p{N}])["'“‘]?${escapedTitle}["'”’]?\\s+(?:is|was|became|becomes|remains|served\\s+as)\\s+(?:(?:a|an|the|his|her|their)\\s+)?(?:(?:[\\p{L}\\p{N}]+(?:[-’'][\\p{L}\\p{N}]+)?\\s+){0,6})(?:song|single|track|recording)\\b`,
+  // Require a song/track predicate so a short title cannot match an artist name
+  // or a nearby unrelated title. Japanese prose uses the same subject rule.
+  const english = new RegExp(
+    `(?:^|[^\\p{L}\\p{N}])["'“‘「『]?${escapedTitle}["'”’」』]?\\s+(?:is|was|became|becomes|remains|served\\s+as)\\s+(?:(?:a|an|the|his|her|their)\\s+)?(?:(?:[\\p{L}\\p{N}]+(?:[-’'][\\p{L}\\p{N}]+)?\\s+){0,6})(?:song|single|track|recording)\\b`,
     "iu",
-  ).test(normalized);
+  );
+  if (english.test(normalized)) return true;
+  const quotedTitle = `[「『"'“‘]?${escapedTitle}[」』"'”’]?`;
+  const songNoun = "(?:楽曲|曲|シングル|トラック|作品)";
+  const titleFirst = new RegExp(
+    `(?:^|[^\\p{L}\\p{N}])${quotedTitle}\\s*(?:は|が)\\s*[^。！？]{0,100}${songNoun}(?:(?:で|だ|です|として|となる|であり|、)|[。！？]|$)`,
+    "iu",
+  );
+  if (titleFirst.test(normalized)) return true;
+  if (!artist?.trim()) return false;
+  const escapedArtist = escapeRegExp(artist.normalize("NFKC").trim());
+  const artistFirst = new RegExp(
+    `(?:^|[^\\p{L}\\p{N}])${escapedArtist}\\s*(?:の|による|が(?:発表|リリース|配信)した)\\s*${quotedTitle}\\s*(?:は|が)?\\s*[^。！？]{0,100}${songNoun}(?:(?:で|だ|です|として|となる|であり|、)|[。！？]|$)`,
+    "iu",
+  );
+  return artistFirst.test(normalized);
 }
 
 function exactArtistMention(text: string, artist: string) {
   const escapedArtist = escapeRegExp(artist.normalize("NFKC").trim());
   if (!escapedArtist) return false;
+  const particles = "はがのとやもをにへで";
   return new RegExp(
-    `(?:^|[^\\p{L}\\p{N}])${escapedArtist}(?=$|[^\\p{L}\\p{N}])`,
+    `(?:^|[^\\p{L}\\p{N}]|[${particles}])${escapedArtist}(?=$|[^\\p{L}\\p{N}]|[${particles}])`,
     "iu",
   ).test(text.normalize("NFKC"));
 }
@@ -414,7 +489,7 @@ function hasOtherNamedSongSubject(
   artist: string,
 ) {
   if (foreignNamedSongTitle(sentence, title, artist)) return true;
-  if (exactSongTitleIsSubject(sentence, title)) return false;
+  if (exactSongTitleIsSubject(sentence, title, artist)) return false;
   const quoted =
     /["“‘][^"“”‘’]{2,160}["”’]\s+(?:is|was|became|becomes|remains)\s+(?:(?:a|an|the|his|her|their)\s+)?(?:(?:[\p{L}\p{N}]+(?:[-’'][\p{L}\p{N}]+)?\s+){0,6})(?:song|single|track|recording)\b/iu.test(
       sentence,
@@ -434,6 +509,9 @@ function isSongScopedContinuation(sentence: string) {
     ) ||
     /^As\s+[^.!?]{1,100},\s+(?:the\s+(?:lyrics|song|track|recording|music|sound)|its|their)\b/i.test(
       text,
+    ) ||
+    /^(?:この曲|同曲|本作|楽曲|曲調|サウンド|音楽性|歌詞|ボーカル|歌声|テンポ|リズム|ビート|アレンジ|編曲)(?:は|が|では|には)/.test(
+      text,
     )
   );
 }
@@ -451,7 +529,7 @@ function exactSongScopes(
       .map((sentence) => sentence.trim())
       .filter(Boolean);
     const subject = sentences.findIndex((sentence) =>
-      exactSongTitleIsSubject(sentence, title),
+      exactSongTitleIsSubject(sentence, title, artist),
     );
     if (subject < 0) continue;
     if (hasOtherNamedSongSubject(sentences[subject], title, artist)) continue;
@@ -1413,13 +1491,14 @@ export function fitInferenceRequest(body: any, evidence: Evidence[]) {
   while (sources.length > 1 && lowValueIndex() >= 0)
     sources.splice(lowValueIndex(), 1);
   const compactCriterion = (tag: (typeof tagDefinitions)[number]) => {
+    const { evidence_policy: _policy, ...modelTag } = tag;
     const generic = `Webの説明・公式情報で「${tag.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
     return tag.criterion === generic
       ? {
-          ...tag,
+          ...modelTag,
           criterion: `${tag.name}についてWebで具体的な根拠を確認。曲名や作者名から推測しない。`,
         }
-      : tag;
+      : modelTag;
   };
   const compactGuidance: Record<string, string> = {
     ジャンル:
@@ -1627,7 +1706,7 @@ export function validateAnalysis(
     reference_url: string | null;
     artist_hint?: string | null;
   },
-  tags: { id: string; name: string; category?: string; criterion?: string }[],
+  tags: TagDefinition[],
 ): Analysis {
   let value: any;
   try {
@@ -1803,154 +1882,53 @@ export function validateAnalysis(
   return value;
 }
 
-const seedTagCategories = (tagId: string) => {
-  const number = Number(tagId.match(/^tag-(\d+)$/)?.[1]);
-  if (number >= 1 && number <= 12) return "ジャンル";
-  if (number >= 13 && number <= 22) return "雰囲気";
-  if (number >= 23 && number <= 29) return "勢い";
-  if (number >= 30 && number <= 32) return "テンポ感";
-  if (number >= 33 && number <= 37) return "歌声の構成";
-  if (number >= 38 && number <= 42) return "歌声の印象";
-  if (number >= 43 && number <= 50) return "歌詞テーマ";
-  return undefined;
-};
-const seedTagNames = [
-  "",
-  "J-POP",
-  "K-POP",
-  "ロック",
-  "ポップロック",
-  "R&B",
-  "ヒップホップ",
-  "エレクトロ",
-  "ダンスポップ",
-  "ジャズ",
-  "フォーク",
-  "クラシック",
-  "メタル",
-  "明るい",
-  "切ない",
-  "穏やか",
-  "暗い",
-  "幻想的",
-  "懐かしい",
-  "コミカル",
-  "爽やか",
-  "温かい",
-  "緊張感",
-  "しっとり",
-  "軽快",
-  "力強い",
-  "激しい",
-  "疾走感",
-  "ダンサブル",
-  "重厚",
-  "ゆったり",
-  "中程度",
-  "速い",
-  "人の歌声",
-  "合成歌声",
-  "複数ボーカル",
-  "コーラス中心",
-  "インスト",
-  "透明感",
-  "柔らかい",
-  "力強い歌声",
-  "ささやくような",
-  "ハスキー",
-  "恋愛",
-  "別れ",
-  "孤独",
-  "応援",
-  "希望",
-  "日常",
-  "自己探求",
-  "社会・世界",
-];
-const seedTagSignals: Record<string, RegExp> = {
-  "tag-01": /\bj\s*[-–]?\s*pop\b|日本(?:語)?ポップ(?:音楽|ス)?|邦楽ポップ/i,
-  "tag-02": /\bk\s*[-–]?\s*pop\b|韓国ポップ(?:音楽|ス)?/i,
-  "tag-03": /ロック|\brock\b/i,
-  "tag-04": /ポップロック|\bpop\s*[-–]?\s*rock\b|ポップ.{0,16}ロック/i,
-  "tag-05": /\br\s*&\s*b\b|リズム[＆&]ブルース|rhythm and blues/i,
-  "tag-06": /ヒップホップ|\bhip[ -]?hop\b|ラップ.{0,24}(?:ビート|中心)|rap.{0,24}beat/i,
-  "tag-07": /エレクトロ|電子音|\belectronic(?: music)?\b|\bsynthpop\b|シンセ.{0,20}(?:主体|中心|サウンド)|synth(?:sizer)?[- ](?:based|pop|driven)/i,
-  "tag-08": /ダンスポップ|\bdance[ -]?pop\b|\bsynthpop\s+dance\s+(?:song|track|tune)\b|\bpop.{0,16}dance.{0,16}(?:tune|track|song)\b|ポップなダンスチューン|ポップ.{0,16}ダンス.{0,16}(?:ビート|チューン)|踊れるビート.{0,24}ポップ/i,
-  "tag-09": /ジャズ|\bjazz\b|スウィング|\bswing\b|即興演奏|\bimprovisation\b/i,
-  "tag-10": /フォーク|\bfolk(?: music)?\b/i,
-  "tag-11": /クラシック|\bclassical(?: music)?\b|西洋芸術音楽/i,
-  "tag-12": /メタル|\bmetal\b/i,
-  "tag-13": /明る|前向き|\bbright\b|\bcheerful\b|\bpositive mood\b/i,
-  "tag-14": /切な|胸.{0,8}締め|悲し|\bbittersweet\b|\bsad\b|\bmelanchol/i,
-  "tag-15": /穏やか|安ら|落ち着|\bcalm\b|\bpeaceful\b|\bserene\b/i,
-  "tag-16": /暗い|陰鬱|\bdark\b|\bgloomy\b/i,
-  "tag-17": /幻想|夢のよう|非現実的|\bdreamy\b|\bfantastical\b|\bethereal\b/i,
-  "tag-18": /懐か|レトロ|\bnostalgic\b|\bretro\b/i,
-  "tag-19": /コミカル|滑稽|ユーモア|\bcomical\b|\bhumorous\b/i,
-  "tag-20": /爽やか|清涼|すっきり|\brefreshing\b|\bcrisp\b/i,
-  "tag-21": /温か|ぬくもり|親しみ|\bwarm(?:th)?\b|\bwelcoming\b/i,
-  "tag-22": /緊張感|緊迫感|張りつめ|不安.{0,12}(?:曲調|雰囲気)|\btense\b|\bsuspenseful\b/i,
-  "tag-23": /しっとり|静かで落ち着|情緒的な演奏|\bsoftly paced\b|\bsubdued performance\b/i,
-  "tag-24": /軽快|軽やか|弾むリズム|\blively rhythm\b|\bbouncy rhythm\b|\blight and bouncy\b/i,
-  "tag-25": /力強|強いエネルギー|\bpowerful performance\b|\bstrong energy\b/i,
-  "tag-26": /激し|荒々し|\bintense\b|\bfierce\b|\brough sound\b/i,
-  "tag-27": /疾走感|駆け抜け|\brapid and driving\b|\bdriving performance\b/i,
-  "tag-28": /ダンサブル|踊りやすい|反復ビート|\bdanceable\b|\brepetitive beat\b|\bgroove/i,
-  "tag-29": /重厚|厚く重い|\bmassive sound\b|\bheavy arrangement\b/i,
-  "tag-30": /ゆったり|ゆっくりしたテンポ|\bslow tempo\b|\bleisurely tempo\b/i,
-  "tag-31": /中程度.{0,8}テンポ|ミドルテンポ|\bmid(?:dle)?[- ]tempo\b|\bmoderate tempo\b/i,
-  "tag-32": /速いテンポ|アップテンポ|\bfast tempo\b|\bup[- ]tempo\b|\bhigh[- ]tempo\b/i,
-  "tag-33": /人の歌声|人間(?:の)?歌唱|human vocals?/i,
-  "tag-34": /合成音声.{0,16}歌唱|合成歌声|ボーカロイド|vocaloid|synthetic vocals?/i,
-  "tag-35": /複数(?:人|名)?(?:の)?ボーカル|複数(?:人|名)?(?:が)?歌唱|デュエット|duet|multiple vocals?/i,
-  "tag-36": /コーラス.{0,12}(?:中心|主役)|合唱.{0,12}(?:中心|主役)|choir.{0,12}(?:center|focus)|chorus.{0,12}(?:center|focus)/i,
-  "tag-37": /インスト(?:ゥルメンタル)?|instrumental(?: track| song)?|器楽曲/i,
-  "tag-38": /透明感|澄んだ|透き通|\bclear and transparent\b|\btransparent vocals?\b/i,
-  "tag-39": /柔らか|優しい歌声|\bsoft vocals?\b|\bgentle vocals?\b|\btender voice\b/i,
-  "tag-40": /力強い歌声|力のある歌声|\bpowerful vocals?\b|\bstrong singing voice\b/i,
-  "tag-41": /ささや(?:く|き)|\bwhisper(?:ing)? vocals?\b|\bwhispery voice\b/i,
-  "tag-42": /ハスキー|かすれた歌声|\bhusky vocals?\b|\braspy voice\b/i,
-  "tag-43": /歌詞.{0,240}(?:恋愛|愛情|恋心)|(?:恋愛|愛情|恋心).{0,240}歌詞|\blyrics?.{0,240}(?:love|romance|relationship)/i,
-  "tag-44": /歌詞.{0,240}(?:別れ|失恋)|(?:別れ|失恋).{0,240}歌詞|\blyrics?.{0,240}(?:farewell|breakup|parting)/i,
-  "tag-45": /歌詞.{0,240}(?:孤独|ひとり)|(?:孤独|ひとり).{0,240}歌詞|\blyrics?.{0,240}(?:loneliness|alone)/i,
-  "tag-46": /歌詞.{0,240}(?:応援|励ま|背中を押)|(?:応援|励ま).{0,240}歌詞|\blyrics?.{0,240}(?:encourag|support|cheer)/i,
-  "tag-47": /歌詞.{0,240}(?:希望|光を見つけ|未来を信じ)|(?:希望|光を見つけ|未来を信じ).{0,240}歌詞|\blyrics?.{0,240}(?:hope|look toward a better future|new possibilities)|(?:hope|a better future|new possibilities).{0,240}\blyrics?/i,
-  "tag-48": /歌詞.{0,240}(?:日常|毎日)|(?:日常|毎日).{0,240}歌詞|\blyrics?.{0,240}everyday life/i,
-  "tag-49": /歌詞.{0,240}(?:自己探求|自分探し)|(?:自己探求|自分探し).{0,240}歌詞|\blyrics?.{0,240}self[- ]?discovery/i,
-  "tag-50": /歌詞.{0,240}(?:社会|世界(?!観))|(?:社会|世界(?!観)).{0,240}歌詞|\blyrics?.{0,240}(?:society|the world)\b/i,
-};
-function trustedSeedProfile(tag: {
+type TagDefinition = {
   id: string;
   name: string;
   category?: string;
   criterion?: string;
-}) {
-  const number = Number(tag.id.match(/^tag-(\d+)$/)?.[1]);
-  const criterion = tag.criterion ?? "";
-  const profile = seedTagSignals[tag.id];
-  const generic =
-    criterion ===
-    `Webの説明・公式情報で「${tag.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
-  const peopleSinging =
-    tag.id === "tag-33" &&
-    /人(?:の|または)|人間|human|people/i.test(criterion) &&
-    /歌唱|歌声|ボーカル|vocal|voice/i.test(criterion) &&
-    !/合成|synthetic|vocaloid/i.test(criterion);
-  const dancePop =
-    tag.id === "tag-08" &&
-    /ポップ|pop/i.test(criterion) &&
-    /ダンス|踊れる|dance/i.test(criterion);
-  const denied =
-    /ではなく|ではない|とは言えない|使わない|含まない|該当しない|\bnot\b|\bwithout\b|\brather than\b|\binstead of\b/i.test(
-      criterion,
+  evidence_policy?: TagEvidencePolicy | null;
+};
+
+function policySignal(tag: TagDefinition) {
+  const patterns = tag.evidence_policy?.positive_patterns?.filter(Boolean);
+  if (!patterns?.length) return undefined;
+  try {
+    return new RegExp(
+      patterns.map((pattern) => `(?:${pattern})`).join("|"),
+      "iu",
     );
-  return seedTagCategories(tag.id) === tag.category &&
-    seedTagNames[number] === tag.name &&
-    !denied &&
-    (profile?.test(criterion) || generic || peopleSinging || dancePop)
-    ? profile
-    : undefined;
+  } catch {
+    return undefined;
+  }
 }
+
+function policyNegativeSignal(tag: TagDefinition) {
+  const patterns = tag.evidence_policy?.negative_patterns?.filter(Boolean);
+  if (!patterns?.length) return undefined;
+  try {
+    return new RegExp(
+      patterns.map((pattern) => `(?:${pattern})`).join("|"),
+      "iu",
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function policyContextSatisfied(tag: TagDefinition, text: string) {
+  const signal = policySignal(tag);
+  return (tag.evidence_policy?.required_context ?? []).every((context) => {
+    if (context === "genre" || context === "tempo" || context === "lyrics")
+      return Boolean(signal?.test(text));
+    if (context === "mood" || context === "energy")
+      return signal ? hasSongPropertyContext(text, signal) : false;
+    if (context === "voice")
+      return descriptorSearchGroups[2].cues.test(text);
+    return true;
+  });
+}
+
 const stopCriterionTerms = new Set(
   "音楽 楽曲 曲 曲調 演奏 説明 記述 明示 特徴 具体 説明される 基準 公式 Web の と が を に は する 主体 中心 特徴 人 または による という 的な 歌声 歌唱 音 説明を 音楽的 音楽性 使う 場合".split(
     /\s+/,
@@ -2108,13 +2086,14 @@ function identityCreditWindow(
 }
 
 function tagSemanticDecision(
-  tag: { id: string; name: string; category?: string; criterion?: string },
+  tag: TagDefinition,
   quoteText: string,
   reasoning: string,
   factualVoice: boolean,
   contextText = quoteText,
 ) {
-  const profile = trustedSeedProfile(tag);
+  const profile = policySignal(tag);
+  const policyNegative = policyNegativeSignal(tag);
   const quote = norm(quoteText);
   const nameMatch = norm(tag.name).length > 1 && quote.includes(norm(tag.name));
   const criterionMatch = criterionTerms(tag.criterion).some((term) =>
@@ -2158,11 +2137,15 @@ function tagSemanticDecision(
     : profile
       ? profile.test(contextText) &&
         !tagEvidenceNegated(contextText, profile) &&
+        !policyNegative?.test(contextText) &&
+        policyContextSatisfied(tag, contextText) &&
         (!needsVoiceNoun || voiceNoun) &&
         moodOrEnergyContext
       : (nameMatch || criterionMatch) &&
         categoryCue &&
+        policyContextSatisfied(tag, contextText) &&
         moodOrEnergyContext &&
+        !policyNegative?.test(contextText) &&
         !tagEvidenceNegated(contextText, customSignal);
   const hedged =
     /\b(?:maybe|possibly|perhaps|might|could be|seems?)\b|かもしれ|可能性が|らしい|っぽい|推測/i.test(
@@ -2193,7 +2176,7 @@ function tagSemanticDecision(
 }
 
 export function inferenceTagCandidates(
-  tags: { id: string; name: string; category?: string; criterion?: string }[],
+  tags: TagDefinition[],
   evidence: Evidence[],
   recording?: string | null,
 ) {
@@ -2208,11 +2191,17 @@ export function inferenceTagCandidates(
     ),
   );
   return tags.filter((tag) => {
-    const profile = trustedSeedProfile(tag);
-    const isUnchangedSeed = Boolean(profile);
-    if (isUnchangedSeed && profile) {
-      if (tag.id === "tag-33" && vocals) return true;
-      return profile.test(descriptive) && !tagEvidenceNegated(descriptive, profile);
+    const profile = policySignal(tag);
+    const policyNegative = policyNegativeSignal(tag);
+    if (profile) {
+      if (tag.id === "tag-33" && vocals && policyContextSatisfied(tag, descriptive))
+        return true;
+      return (
+        profile.test(descriptive) &&
+        !tagEvidenceNegated(descriptive, profile) &&
+        !policyNegative?.test(descriptive) &&
+        policyContextSatisfied(tag, descriptive)
+      );
     }
     const normalizedText = norm(descriptive);
     return [tag.name, ...criterionTerms(tag.criterion)].some(

@@ -792,7 +792,7 @@ it("links a cover to an explicitly evidenced original recording", async () => {
   expect(v.work_id).toBe(w.id);
   expect((await allRows(db, "responses"))[0].version_id).toBe(v.id);
 });
-it("preserves manually locked credits and tags during research replay", async () => {
+it("preserves manual force-off while refreshing its independent automatic decision", async () => {
   await answer();
   await drain();
   const v = (await allRows(db, "versions"))[0];
@@ -834,7 +834,55 @@ it("preserves manually locked credits and tags during research replay", async ()
     .run();
   await drain();
   expect((await allRows(db, "credits"))[0]).toEqual(lockedCredit);
-  expect((await allRows(db, "tag_assignments"))[0]).toEqual(lockedTag);
+  expect((await allRows(db, "tag_assignments"))[0]).toMatchObject({
+    id: lockedTag.id,
+    confirmed: false,
+    manual_lock: true,
+    manual_override: "force_off",
+    evidence: "Admin rationale",
+    auto_confirmed: true,
+  });
+});
+
+it("reconciles a stale automatic tag when refreshed research no longer supports it", async () => {
+  await answer();
+  await drain();
+  const version = (await allRows(db, "versions"))[0];
+  const before = (await allRows(db, "tag_assignments"))[0];
+  expect(before).toMatchObject({ tag_id: "tag-33", confirmed: true });
+
+  model.recordings[0].tags = [];
+  const job = (await allRows(db, "research_jobs")).find(
+    (candidate) => candidate.version_id === version.id,
+  )!;
+  await db
+    .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+    .bind(
+      JSON.stringify({
+        ...job,
+        stage: "infer",
+        status: "queued",
+        candidates: [],
+        catalog_cursor: 0,
+        metadata_cursor: 0,
+        metadata_source_cursor: 0,
+        next_attempt_at: "2000-01-01T00:00:00Z",
+      }),
+      job.id,
+    )
+    .run();
+
+  await drain();
+  const after = (await allRows(db, "tag_assignments"))[0];
+  expect(after).toMatchObject({
+    id: before.id,
+    tag_id: "tag-33",
+    auto_confirmed: false,
+    confirmed: false,
+    manual_lock: false,
+    origin: "research",
+  });
+  expect(after.evidence).toContain("現在の辞書と取得済み根拠では非該当");
 });
 it("cached recording URL never silently overrides a contradictory title", async () => {
   await answer();
@@ -3176,7 +3224,7 @@ it("keeps admin-edited criteria while upgrading untouched generic initial defini
   const old = `Webの説明・公式情報で「${legacy.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
   await db
     .prepare("UPDATE tags SET data=? WHERE id=?")
-    .bind(JSON.stringify({ ...legacy, criterion: old }), legacy.id)
+    .bind(JSON.stringify({ ...legacy, criterion: old, revision: 1 }), legacy.id)
     .run();
   await db
     .prepare("UPDATE tags SET data=? WHERE id=?")
@@ -3389,7 +3437,7 @@ it("aligns fresh and migrated classical tag definition while preserving its ID/n
   const old = `Webの説明・公式情報で「${classical.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
   await db
     .prepare("UPDATE tags SET data=? WHERE id=?")
-    .bind(JSON.stringify({ ...classical, criterion: old }), classical.id)
+    .bind(JSON.stringify({ ...classical, criterion: old, revision: 1 }), classical.id)
     .run();
   await db.exec(
     (await readFile("worker/schema/0004_tag_criteria.sql", "utf8"))
@@ -4375,7 +4423,16 @@ it("publishes a release-article tag through worker association without accepting
     confirmed: true,
     source_id: expect.any(String),
   });
-  expect(assignments.find((tag) => tag.id === excluded.id)).toEqual(excluded);
+  expect(assignments.find((tag) => tag.id === excluded.id)).toMatchObject({
+    id: excluded.id,
+    version_id: excluded.version_id,
+    tag_id: excluded.tag_id,
+    confirmed: false,
+    manual_lock: true,
+    manual_override: "force_off",
+    evidence: excluded.evidence,
+    origin: excluded.origin,
+  });
   const tagSource = (await allRows(db, "sources")).find(
     (source) => source.id === assignments.find((tag) => tag.id !== excluded.id)?.source_id,
   );
@@ -4853,11 +4910,13 @@ it("moves a legacy generic descriptor extraction into the independent group cycl
 });
 
 it.each([
-  { label: "old completed job", analysis_version: "1", status: "complete", automatic: true, queued: true },
-  { label: "current completed job", analysis_version: "2", status: "complete", automatic: true, queued: false },
-  { label: "active current job", analysis_version: "2", status: "queued", automatic: true, queued: false },
-  { label: "manual refresh", analysis_version: "2", status: "complete", automatic: false, queued: true },
-])("$label tag research queueing follows the analysis version", async (scenario) => {
+  { label: "old completed job", analysis_version: "1", status: "complete", automatic: true, currentDictionary: true, queued: true },
+  { label: "stale dictionary", analysis_version: "2", status: "complete", automatic: true, currentDictionary: false, queued: true },
+  { label: "current completed job", analysis_version: "2", status: "complete", automatic: true, currentDictionary: true, queued: false },
+  { label: "active current job", analysis_version: "2", status: "queued", automatic: true, currentDictionary: true, queued: false },
+  { label: "manual refresh", analysis_version: "2", status: "complete", automatic: false, currentDictionary: true, queued: true },
+])("$label tag research queueing follows analysis and dictionary versions", async (scenario) => {
+  const { tagDictionaryFingerprint } = await import("../src/tags");
   const version: Version = newRow({
     work_id: "work-1",
     title: "Blue Song",
@@ -4867,11 +4926,13 @@ it.each([
     research_status: "complete",
     manual_lock: true,
   });
+  const dictionaryVersion = tagDictionaryFingerprint(await allRows(db, "tags"));
   const old = {
     ...researchJob(version),
     stage: "done" as const,
     purpose: "tag_enrichment" as const,
     analysis_version: scenario.analysis_version,
+    dictionary_version: scenario.currentDictionary ? dictionaryVersion : "tagdict-v1-stale",
     status: scenario.status as ResearchJob["status"],
     descriptive_status: "complete" as const,
     descriptive_source_ids: ["s1"],
@@ -4891,6 +4952,7 @@ it.each([
       stage: "search",
       purpose: "tag_enrichment",
       analysis_version: "2",
+      dictionary_version: dictionaryVersion,
     });
     expect(queued.descriptive_status).toBeUndefined();
     expect(queued.descriptive_source_ids).toBeUndefined();

@@ -3,6 +3,7 @@ import type {
   SurveyRecord,
   SongTagEditorData,
   TagAssignment,
+  ManualTagOverride,
 } from "../../shared/contracts";
 import {
   allRows,
@@ -16,6 +17,26 @@ import {
   type Actor,
   type Plan,
 } from "./store";
+
+function manualOverrideOf(
+  assignment?: TagAssignment,
+): ManualTagOverride {
+  if (!assignment) return "auto";
+  if (assignment.manual_override === "force_on" || assignment.manual_override === "force_off")
+    return assignment.manual_override;
+  if (assignment.manual_lock)
+    return assignment.confirmed ? "force_on" : "force_off";
+  return "auto";
+}
+
+function automaticConfirmedOf(assignment?: TagAssignment) {
+  if (!assignment) return false;
+  if (typeof assignment.auto_confirmed === "boolean")
+    return assignment.auto_confirmed;
+  return assignment.origin === "research" && !assignment.manual_lock
+    ? assignment.confirmed
+    : false;
+}
 
 export async function songTagEditor(
   env: WorkerEnv,
@@ -35,13 +56,26 @@ export async function songTagEditor(
         const a = assignments.find(
           (a) => a.version_id === record.version_id && a.tag_id === t.id,
         );
+        const manual_override = manualOverrideOf(a);
+        const auto_selected = automaticConfirmedOf(a);
+        const selected =
+          manual_override === "force_on"
+            ? true
+            : manual_override === "force_off"
+              ? false
+              : auto_selected;
         return {
           ...t,
-          selected: a?.confirmed ?? false,
+          selected,
+          auto_selected,
+          manual_override,
           assignment_id: a?.id ?? null,
           assignment_revision: a?.revision ?? null,
-          manual_lock: a?.manual_lock ?? false,
+          manual_lock: manual_override !== "auto",
           origin: a?.origin ?? null,
+          evidence: a?.evidence ?? null,
+          source_id: a?.source_id ?? null,
+          automatic_evidence_type: a?.automatic_evidence_type ?? null,
         };
       }),
   };
@@ -71,13 +105,23 @@ export async function manualTagPlan(
     if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
     requireKeys(value, [
       "tag_id",
+      "override",
       "confirmed",
       "assignment_id",
       "expected_revision",
     ]);
+    const override: ManualTagOverride =
+      value.override === "auto" ||
+      value.override === "force_on" ||
+      value.override === "force_off"
+        ? value.override
+        : typeof value.confirmed === "boolean"
+          ? value.confirmed
+            ? "force_on"
+            : "force_off"
+          : invalid("タグの手動設定を選んでください。");
     if (
       typeof value.tag_id !== "string" ||
-      typeof value.confirmed !== "boolean" ||
       seen.has(value.tag_id) ||
       !tags.some((t) => t.id === value.tag_id && t.active)
     )
@@ -95,17 +139,44 @@ export async function manualTagPlan(
       conflict(
         "タグが別の端末または自動調査で変更されています。編集欄を開き直してください。",
       );
+    const autoConfirmed = automaticConfirmedOf(before);
+    const autoEvidence =
+      before?.automatic_evidence ??
+      (before?.origin === "research" && !before.manual_lock
+        ? before.evidence
+        : null);
+    const autoSourceId =
+      before?.automatic_source_id ??
+      (before?.origin === "research" && !before.manual_lock
+        ? before.source_id
+        : null);
+    const manualOrigin =
+      actor.type === "admin" ? ("admin" as const) : ("participant" as const);
     const values = {
       version_id: record.version_id!,
       tag_id: value.tag_id,
-      confirmed: value.confirmed,
-      manual_lock: true,
-      origin:
-        actor.type === "admin" ? ("admin" as const) : ("participant" as const),
-      source_id: null,
-      evidence: value.confirmed
-        ? "手動設定：タグを追加"
-        : "手動設定：タグを解除",
+      auto_confirmed: autoConfirmed,
+      manual_override: override === "auto" ? null : override,
+      confirmed:
+        override === "force_on"
+          ? true
+          : override === "force_off"
+            ? false
+            : autoConfirmed,
+      manual_lock: override !== "auto",
+      origin: override === "auto" && autoEvidence ? ("research" as const) : manualOrigin,
+      automatic_evidence: autoEvidence,
+      automatic_source_id: autoSourceId,
+      automatic_evidence_type: before?.automatic_evidence_type ?? null,
+      dictionary_version: before?.dictionary_version ?? null,
+      research_result_id: before?.research_result_id ?? null,
+      source_id: override === "auto" ? autoSourceId : null,
+      evidence:
+        override === "force_on"
+          ? "手動設定：タグを追加"
+          : override === "force_off"
+            ? "手動設定：タグを解除"
+            : autoEvidence ?? "手動設定を解除し、自動判定に戻しました（自動根拠なし）",
     };
     const after = before ? updated(before, values) : newRow(values);
     writes.push({ id: after.id, data: after });

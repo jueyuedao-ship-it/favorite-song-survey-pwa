@@ -67,12 +67,28 @@ export interface SurveyRecord extends Row {
   artist_hint: string | null;
   reference_url: string | null;
 }
+export type TagPolicyContext =
+  | "genre"
+  | "mood"
+  | "energy"
+  | "tempo"
+  | "voice"
+  | "lyrics";
+export interface TagEvidencePolicy {
+  positive_patterns: string[];
+  negative_patterns?: string[];
+  required_context?: TagPolicyContext[];
+  exclusive_group?: string | null;
+}
 export interface Tag extends Row {
   name: string;
   category: string;
   criterion: string;
   active: boolean;
+  /** Machine-readable policy. Legacy rows without it fall back to the built-in seed profile. */
+  evidence_policy?: TagEvidencePolicy | null;
 }
+export type ManualTagOverride = "auto" | "force_on" | "force_off";
 export interface TagAssignment extends Row {
   version_id: string;
   tag_id: string;
@@ -81,7 +97,21 @@ export interface TagAssignment extends Row {
   origin: "admin" | "research" | "participant";
   confirmed: boolean;
   manual_lock: boolean;
+  /** Automatic decision is stored independently from the human override. */
+  auto_confirmed?: boolean;
+  manual_override?: Exclude<ManualTagOverride, "auto"> | null;
+  automatic_evidence?: string | null;
+  automatic_source_id?: string | null;
+  automatic_evidence_type?: "direct" | "semantic_inference" | null;
+  dictionary_version?: string | null;
+  research_result_id?: string | null;
 }
+export type SourceQualityTier =
+  | "official"
+  | "platform"
+  | "editorial"
+  | "community"
+  | "unknown";
 export interface Source extends Row {
   version_id: string;
   url: string;
@@ -90,6 +120,8 @@ export interface Source extends Row {
   checked_at: string;
   origin: "admin" | "research";
   metadata?: RecordingMetadata;
+  quality_tier?: SourceQualityTier;
+  quality_reason?: string;
 }
 /** Original public fields from a fixed trusted recording metadata endpoint. */
 export interface RecordingMetadata {
@@ -98,6 +130,12 @@ export interface RecordingMetadata {
   title: string;
   author_name: string;
 }
+export type TagCoverageGroup =
+  | "genre_sound"
+  | "mood_energy_tempo"
+  | "voice"
+  | "lyric_theme";
+export type TagCoverageStatus = "complete" | "unavailable" | "unknown";
 export interface ResearchResult extends Row {
   raw_model?: string;
   review_warnings?: string[];
@@ -107,6 +145,9 @@ export interface ResearchResult extends Row {
   analysis_version: string;
   source_ids: string[];
   payload: Record<string, unknown>;
+  descriptive_coverage?: Partial<
+    Record<TagCoverageGroup, Exclude<TagCoverageStatus, "unknown">>
+  >;
 }
 export interface ResearchEvidence {
   id: string;
@@ -195,7 +236,9 @@ export interface ResearchJob extends Row {
   descriptive_status?: "complete" | "unavailable";
   descriptive_source_ids?: string[];
   descriptive_category?: string;
-  descriptive_coverage?: Record<string, "complete" | "unavailable">;
+  descriptive_coverage?: Partial<
+    Record<TagCoverageGroup, Exclude<TagCoverageStatus, "unknown">>
+  >;
   analysis?: ResearchAnalysis;
   raw_model?: string;
   metadata_cursor?: number;
@@ -339,13 +382,26 @@ export interface RecordUpdate extends RevisionMutation {
 }
 export interface ManualTagChange {
   tag_id: string;
-  confirmed: boolean;
+  /** New clients send override. confirmed is retained for backwards-compatible requests. */
+  override?: ManualTagOverride;
+  confirmed?: boolean;
   assignment_id: string | null;
   expected_revision: number | null;
 }
 export interface SongTagEditorData {
   version_id: string;
-  tags: (Tag & { selected: boolean; assignment_id: string | null; assignment_revision: number | null; manual_lock: boolean; origin: TagAssignment["origin"] | null })[];
+  tags: (Tag & {
+    selected: boolean;
+    auto_selected: boolean;
+    manual_override: ManualTagOverride;
+    assignment_id: string | null;
+    assignment_revision: number | null;
+    manual_lock: boolean;
+    origin: TagAssignment["origin"] | null;
+    evidence: string | null;
+    source_id: string | null;
+    automatic_evidence_type: TagAssignment["automatic_evidence_type"] | null;
+  })[];
 }
 export interface CatalogCandidate extends Version {
   work_title: string;
@@ -357,6 +413,7 @@ export interface SongDetail {
   credits: (Credit & { entity: Entity; aliases: Alias[] })[];
   tags: (TagAssignment & { tag: Tag })[];
   sources: Source[];
+  tag_coverage?: Record<TagCoverageGroup, TagCoverageStatus>;
 }
 export interface RecordCandidates {
   response_id: string;
@@ -396,6 +453,10 @@ export interface Statistics {
   rankings: Ranking[];
   roles: Record<CreditRole, RoleCount[]>;
   weekly_tags: WeeklyTag[];
+  coverage?: Record<
+    TagCoverageGroup,
+    { complete: number; unavailable: number; unknown: number }
+  >;
 }
 export interface ChangeEvent {
   sequence: number;

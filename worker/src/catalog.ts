@@ -69,7 +69,7 @@ const fields: Record<EditableTable, string[]> = {
     "confirmed",
     "manual_lock",
   ],
-  tags: ["name", "category", "criterion", "active"],
+  tags: ["name", "category", "criterion", "evidence_policy", "active"],
   tag_assignments: [
     "version_id",
     "tag_id",
@@ -146,6 +146,59 @@ function boolean(value: any) {
   if (typeof value !== "boolean") invalid();
   return value;
 }
+function tagEvidencePolicy(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  let parsed: any = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      invalid("判定ポリシーはJSONで入力してください");
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    invalid("判定ポリシーが無効です");
+  const patterns = (key: string, optional = false) => {
+    const list = parsed[key];
+    if (list === undefined && optional) return undefined;
+    if (
+      !Array.isArray(list) ||
+      list.length > 32 ||
+      list.some((item: unknown) => typeof item !== "string" || !item.trim() || item.length > 500)
+    )
+      invalid("判定ポリシーのパターンを確認してください");
+    for (const pattern of list)
+      try {
+        new RegExp(pattern, "iu");
+      } catch {
+        invalid("判定ポリシーに無効な正規表現があります");
+      }
+    return list.map((item: string) => item.trim());
+  };
+  const positive_patterns = patterns("positive_patterns");
+  if (!positive_patterns?.length)
+    invalid("判定ポリシーにはpositive_patternsが必要です");
+  const negative_patterns = patterns("negative_patterns", true);
+  const required_context = parsed.required_context;
+  const contexts = ["genre", "mood", "energy", "tempo", "voice", "lyrics"];
+  if (
+    required_context !== undefined &&
+    (!Array.isArray(required_context) ||
+      required_context.length > contexts.length ||
+      required_context.some((item: unknown) => typeof item !== "string" || !contexts.includes(item)))
+  )
+    invalid("判定ポリシーのrequired_contextが無効です");
+  const exclusive_group =
+    parsed.exclusive_group === undefined || parsed.exclusive_group === null || parsed.exclusive_group === ""
+      ? null
+      : text(parsed.exclusive_group, 80);
+  return {
+    positive_patterns,
+    ...(negative_patterns?.length ? { negative_patterns } : {}),
+    ...(required_context?.length ? { required_context: [...new Set(required_context)] } : {}),
+    ...(exclusive_group ? { exclusive_group } : {}),
+  };
+}
 export function valuesFor(
   table: EditableTable,
   input: unknown,
@@ -205,6 +258,7 @@ export function valuesFor(
       v.name = text(v.name, 80);
       v.category = text(v.category, 80);
       v.criterion = text(v.criterion, 2000);
+      v.evidence_policy = tagEvidencePolicy(v.evidence_policy);
       defaults("active", true);
       boolean(v.active);
       break;
@@ -239,7 +293,22 @@ export function valuesFor(
     if (current && !("manual_lock" in given)) v.manual_lock = true;
     boolean(v.manual_lock);
   }
-  return Object.fromEntries(fields[table].map((k) => [k, v[k]]));
+  const result = Object.fromEntries(fields[table].map((k) => [k, v[k]]));
+  if (current && table === "tag_assignments")
+    for (const key of [
+      "auto_confirmed",
+      "manual_override",
+      "automatic_evidence",
+      "automatic_source_id",
+      "automatic_evidence_type",
+      "dictionary_version",
+      "research_result_id",
+    ])
+      if (current[key] !== undefined) result[key] = current[key];
+  if (current && table === "sources")
+    for (const key of ["quality_tier", "quality_reason"])
+      if (current[key] !== undefined) result[key] = current[key];
+  return result;
 }
 export function referenceGuards(
   db: D1Database,
@@ -399,7 +468,7 @@ export async function candidates(
 export async function songDetail(db: D1Database, id: string) {
   const version = await getRow(db, "versions", id),
     work = await getRow(db, "works", version.work_id);
-  const [credits, entities, aliases, tags, assignments, sources] =
+  const [credits, entities, aliases, tags, assignments, sources, jobs] =
     await Promise.all([
       allRows(db, "credits"),
       allRows(db, "entities"),
@@ -407,7 +476,17 @@ export async function songDetail(db: D1Database, id: string) {
       allRows(db, "tags"),
       allRows(db, "tag_assignments"),
       allRows(db, "sources"),
+      allRows(db, "research_jobs"),
     ]);
+  const tagJob = jobs
+    .filter((job) => job.version_id === id && job.purpose === "tag_enrichment")
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
+  const coverageGroups = [
+    "genre_sound",
+    "mood_energy_tempo",
+    "voice",
+    "lyric_theme",
+  ] as const;
   return {
     version,
     work,
@@ -427,6 +506,12 @@ export async function songDetail(db: D1Database, id: string) {
       )
       .map((a) => ({ ...a, tag: tags.find((t) => t.id === a.tag_id)! })),
     sources: sources.filter((s) => s.version_id === id),
+    tag_coverage: Object.fromEntries(
+      coverageGroups.map((group) => [
+        group,
+        tagJob?.descriptive_coverage?.[group] ?? "unknown",
+      ]),
+    ),
   };
 }
 

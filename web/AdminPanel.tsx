@@ -91,6 +91,7 @@ function fieldsFor(table: EditableTable, refs: Partial<Record<EditableTable, Nam
       { key: "name", label: "タグ名", required: true },
       { key: "category", label: "分類", required: true },
       { key: "criterion", label: "判定基準", type: "textarea", required: true },
+      { key: "evidence_policy", label: "機械判定ポリシー（JSON）", type: "textarea" },
       { key: "active", label: "利用中", type: "checkbox" },
     ];
     case "tag_assignments": return [
@@ -311,7 +312,16 @@ function AdminTableEditor({ api, token, onError, onNotice, initialTable, tables 
   function beginEdit(row: AnyRow) {
     setEditingId(row.id);
     setCreating(false);
-    setDraft(Object.fromEntries(fields.map((field) => [field.key, row[field.key] ?? (field.type === "checkbox" ? false : "")])));
+    setDraft(
+      Object.fromEntries(
+        fields.map((field) => [
+          field.key,
+          field.key === "evidence_policy" && row[field.key]
+            ? JSON.stringify(row[field.key], null, 2)
+            : row[field.key] ?? (field.type === "checkbox" ? false : ""),
+        ]),
+      ),
+    );
   }
 
   function beginCreate() {
@@ -375,7 +385,10 @@ function AdminTableEditor({ api, token, onError, onNotice, initialTable, tables 
     {loading && <p role="status">読み込んでいます…</p>}
     {rows.length ? <div className="admin-row-list">{rows.map((row) => <article className="admin-row" key={row.id}>
       <div className="admin-row-values"><h4>{String(row.title ?? row.name ?? row.url ?? row.id)}</h4>
-        <dl>{fields.filter((field) => field.key !== "title" && field.key !== "name").map((field) => <div key={field.key}><dt>{field.label}</dt><dd>{field.options?.find((option) => option.value === row[field.key])?.label ?? String(row[field.key] ?? "—")}</dd></div>)}<div><dt>状態</dt><dd>{row.deleted_at ? "削除済み" : "有効"} · revision {row.revision}</dd></div></dl>
+        <dl>{fields.filter((field) => field.key !== "title" && field.key !== "name").map((field) => <div key={field.key}><dt>{field.label}</dt><dd>{field.options?.find((option) => option.value === row[field.key])?.label ??
+          (field.key === "evidence_policy" && row[field.key]
+            ? JSON.stringify(row[field.key])
+            : String(row[field.key] ?? "—"))}</dd></div>)}<div><dt>状態</dt><dd>{row.deleted_at ? "削除済み" : "有効"} · revision {row.revision}</dd></div></dl>
       </div>
       {!row.deleted_at && <div className="button-row"><button type="button" className="quiet-button" onClick={() => beginEdit(row)}>編集</button><button type="button" className="danger-button" onClick={() => void deleteRow(row)}>削除</button></div>}
     </article>)}</div> : !loading && <p className="empty-state">該当する{tableLabels[table]}はありません。新規登録から追加できます。</p>}

@@ -1,0 +1,552 @@
+-- Structured machine-readable evidence policies for the built-in tag dictionary.
+-- Existing administrator policies are preserved; only rows without evidence_policy are backfilled.
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["\\bj\\s*[-–]?\\s*pop\\b|日本(?:語)?ポップ(?:音楽|ス)?|邦楽ポップ"],"required_context":["genre"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-01'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["\\bk\\s*[-–]?\\s*pop\\b|韓国ポップ(?:音楽|ス)?"],"required_context":["genre"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-02'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["ロック|\\brock\\b"],"required_context":["genre"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-03'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["ポップロック|\\bpop\\s*[-–]?\\s*rock\\b|ポップ.{0,16}ロック"],"required_context":["genre"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-04'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["\\br\\s*&\\s*b\\b|リズム[＆&]ブルース|rhythm and blues"],"required_context":["genre"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-05'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["ヒップホップ|\\bhip[ -]?hop\\b|ラップ.{0,24}(?:ビート|中心)|rap.{0,24}beat"],"required_context":["genre"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-06'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["エレクトロ|電子音|\\belectronic(?: music)?\\b|\\bsynthpop\\b|シンセ.{0,20}(?:主体|中心|サウンド)|synth(?:sizer)?[- ](?:based|pop|driven)"],"required_context":["genre"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-07'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["ダンスポップ|\\bdance[ -]?pop\\b|\\bsynthpop\\s+dance\\s+(?:song|track|tune)\\b|\\bpop.{0,16}dance.{0,16}(?:tune|track|song)\\b|ポップなダンスチューン|ポップ.{0,16}ダンス.{0,16}(?:ビート|チューン)|踊れるビート.{0,24}ポップ"],"required_context":["genre"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-08'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["ジャズ|\\bjazz\\b|スウィング|\\bswing\\b|即興演奏|\\bimprovisation\\b"],"required_context":["genre"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-09'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["フォーク|\\bfolk(?: music)?\\b"],"required_context":["genre"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-10'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["クラシック|\\bclassical(?: music)?\\b|西洋芸術音楽"],"required_context":["genre"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-11'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["メタル|\\bmetal\\b"],"required_context":["genre"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-12'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["明る|前向き|\\bbright\\b|\\bcheerful\\b|\\bpositive mood\\b"],"required_context":["mood"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-13'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["切な|胸.{0,8}締め|悲し|\\bbittersweet\\b|\\bsad\\b|\\bmelanchol"],"required_context":["mood"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-14'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["穏やか|安ら|落ち着|\\bcalm\\b|\\bpeaceful\\b|\\bserene\\b"],"required_context":["mood"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-15'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["暗い|陰鬱|\\bdark\\b|\\bgloomy\\b"],"required_context":["mood"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-16'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["幻想|夢のよう|非現実的|\\bdreamy\\b|\\bfantastical\\b|\\bethereal\\b"],"required_context":["mood"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-17'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["懐か|レトロ|\\bnostalgic\\b|\\bretro\\b"],"required_context":["mood"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-18'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["コミカル|滑稽|ユーモア|\\bcomical\\b|\\bhumorous\\b"],"required_context":["mood"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-19'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["爽やか|清涼|すっきり|\\brefreshing\\b|\\bcrisp\\b"],"required_context":["mood"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-20'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["温か|ぬくもり|親しみ|\\bwarm(?:th)?\\b|\\bwelcoming\\b"],"required_context":["mood"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-21'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["緊張感|緊迫感|張りつめ|不安.{0,12}(?:曲調|雰囲気)|\\btense\\b|\\bsuspenseful\\b"],"required_context":["mood"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-22'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["しっとり|静かで落ち着|情緒的な演奏|\\bsoftly paced\\b|\\bsubdued performance\\b"],"required_context":["energy"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-23'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["軽快|軽やか|弾むリズム|\\blively rhythm\\b|\\bbouncy rhythm\\b|\\blight and bouncy\\b"],"required_context":["energy"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-24'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["力強|強いエネルギー|\\bpowerful performance\\b|\\bstrong energy\\b"],"required_context":["energy"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-25'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["激し|荒々し|\\bintense\\b|\\bfierce\\b|\\brough sound\\b"],"required_context":["energy"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-26'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["疾走感|駆け抜け|\\brapid and driving\\b|\\bdriving performance\\b"],"required_context":["energy"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-27'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["ダンサブル|踊りやすい|反復ビート|\\bdanceable\\b|\\brepetitive beat\\b|\\bgroove"],"required_context":["energy"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-28'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["重厚|厚く重い|\\bmassive sound\\b|\\bheavy arrangement\\b"],"required_context":["energy"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-29'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["ゆったり|ゆっくりしたテンポ|\\bslow tempo\\b|\\bleisurely tempo\\b"],"required_context":["tempo"],"exclusive_group":"tempo"}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-30'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["中程度.{0,8}テンポ|ミドルテンポ|\\bmid(?:dle)?[- ]tempo\\b|\\bmoderate tempo\\b"],"required_context":["tempo"],"exclusive_group":"tempo"}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-31'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["速いテンポ|アップテンポ|\\bfast tempo\\b|\\bup[- ]tempo\\b|\\bhigh[- ]tempo\\b"],"required_context":["tempo"],"exclusive_group":"tempo"}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-32'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["人の歌声|人間(?:の)?歌唱|human vocals?"],"required_context":["voice"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-33'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["合成音声.{0,16}歌唱|合成歌声|ボーカロイド|vocaloid|synthetic vocals?"],"required_context":["voice"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-34'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["複数(?:人|名)?(?:の)?ボーカル|複数(?:人|名)?(?:が)?歌唱|デュエット|duet|multiple vocals?"],"required_context":["voice"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-35'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["コーラス.{0,12}(?:中心|主役)|合唱.{0,12}(?:中心|主役)|choir.{0,12}(?:center|focus)|chorus.{0,12}(?:center|focus)"],"required_context":["voice"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-36'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["インスト(?:ゥルメンタル)?|instrumental(?: track| song)?|器楽曲"],"required_context":["voice"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-37'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["透明感|澄んだ|透き通|\\bclear and transparent\\b|\\btransparent vocals?\\b"],"required_context":["voice"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-38'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["柔らか|優しい歌声|\\bsoft vocals?\\b|\\bgentle vocals?\\b|\\btender voice\\b"],"required_context":["voice"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-39'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["力強い歌声|力のある歌声|\\bpowerful vocals?\\b|\\bstrong singing voice\\b"],"required_context":["voice"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-40'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["ささや(?:く|き)|\\bwhisper(?:ing)? vocals?\\b|\\bwhispery voice\\b"],"required_context":["voice"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-41'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["ハスキー|かすれた歌声|\\bhusky vocals?\\b|\\braspy voice\\b"],"required_context":["voice"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-42'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["歌詞.{0,240}(?:恋愛|愛情|恋心)|(?:恋愛|愛情|恋心).{0,240}歌詞|\\blyrics?.{0,240}(?:love|romance|relationship)"],"required_context":["lyrics"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-43'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["歌詞.{0,240}(?:別れ|失恋)|(?:別れ|失恋).{0,240}歌詞|\\blyrics?.{0,240}(?:farewell|breakup|parting)"],"required_context":["lyrics"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-44'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["歌詞.{0,240}(?:孤独|ひとり)|(?:孤独|ひとり).{0,240}歌詞|\\blyrics?.{0,240}(?:loneliness|alone)"],"required_context":["lyrics"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-45'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["歌詞.{0,240}(?:応援|励ま|背中を押)|(?:応援|励ま).{0,240}歌詞|\\blyrics?.{0,240}(?:encourag|support|cheer)"],"required_context":["lyrics"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-46'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["歌詞.{0,240}(?:希望|光を見つけ|未来を信じ)|(?:希望|光を見つけ|未来を信じ).{0,240}歌詞|\\blyrics?.{0,240}(?:hope|look toward a better future|new possibilities)|(?:hope|a better future|new possibilities).{0,240}\\blyrics?"],"required_context":["lyrics"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-47'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["歌詞.{0,240}(?:日常|毎日)|(?:日常|毎日).{0,240}歌詞|\\blyrics?.{0,240}everyday life"],"required_context":["lyrics"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-48'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["歌詞.{0,240}(?:自己探求|自分探し)|(?:自己探求|自分探し).{0,240}歌詞|\\blyrics?.{0,240}self[- ]?discovery"],"required_context":["lyrics"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-49'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;
+
+UPDATE tags
+SET data=json_set(
+  data,
+  '$.evidence_policy', json('{"positive_patterns":["歌詞.{0,240}(?:社会|世界(?!観))|(?:社会|世界(?!観)).{0,240}歌詞|\\blyrics?.{0,240}(?:society|the world)\\b"],"required_context":["lyrics"]}'),
+  '$.revision', json_extract(data,'$.revision') + 1,
+  '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+)
+WHERE id='tag-50'
+  AND json_extract(data,'$.deleted_at') IS NULL
+  AND json_type(data,'$.evidence_policy') IS NULL;

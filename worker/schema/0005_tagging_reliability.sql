@@ -356,7 +356,7 @@ WHERE id='tag-32'
 UPDATE tags
 SET data=json_set(
   data,
-  '$.evidence_policy', json('{"positive_patterns":["人の歌声|人間(?:の)?歌唱|human vocals?"],"required_context":["voice"]}'),
+  '$.evidence_policy', json('{"positive_patterns":["人の歌声|人間(?:の)?歌唱|human vocals?"]}'),
   '$.revision', json_extract(data,'$.revision') + 1,
   '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
 )
@@ -367,7 +367,7 @@ WHERE id='tag-33'
 UPDATE tags
 SET data=json_set(
   data,
-  '$.evidence_policy', json('{"positive_patterns":["合成音声.{0,16}歌唱|合成歌声|ボーカロイド|vocaloid|synthetic vocals?"],"required_context":["voice"]}'),
+  '$.evidence_policy', json('{"positive_patterns":["合成音声.{0,16}歌唱|合成歌声|ボーカロイド|vocaloid|synthetic vocals?"]}'),
   '$.revision', json_extract(data,'$.revision') + 1,
   '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
 )
@@ -378,7 +378,7 @@ WHERE id='tag-34'
 UPDATE tags
 SET data=json_set(
   data,
-  '$.evidence_policy', json('{"positive_patterns":["複数(?:人|名)?(?:の)?ボーカル|複数(?:人|名)?(?:が)?歌唱|デュエット|duet|multiple vocals?"],"required_context":["voice"]}'),
+  '$.evidence_policy', json('{"positive_patterns":["複数(?:人|名)?(?:の)?ボーカル|複数(?:人|名)?(?:が)?歌唱|デュエット|duet|multiple vocals?"]}'),
   '$.revision', json_extract(data,'$.revision') + 1,
   '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
 )
@@ -389,7 +389,7 @@ WHERE id='tag-35'
 UPDATE tags
 SET data=json_set(
   data,
-  '$.evidence_policy', json('{"positive_patterns":["コーラス.{0,12}(?:中心|主役)|合唱.{0,12}(?:中心|主役)|choir.{0,12}(?:center|focus)|chorus.{0,12}(?:center|focus)"],"required_context":["voice"]}'),
+  '$.evidence_policy', json('{"positive_patterns":["コーラス.{0,12}(?:中心|主役)|合唱.{0,12}(?:中心|主役)|choir.{0,12}(?:center|focus)|chorus.{0,12}(?:center|focus)"]}'),
   '$.revision', json_extract(data,'$.revision') + 1,
   '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
 )
@@ -400,7 +400,7 @@ WHERE id='tag-36'
 UPDATE tags
 SET data=json_set(
   data,
-  '$.evidence_policy', json('{"positive_patterns":["インスト(?:ゥルメンタル)?|instrumental(?: track| song)?|器楽曲"],"required_context":["voice"]}'),
+  '$.evidence_policy', json('{"positive_patterns":["インスト(?:ゥルメンタル)?|instrumental(?: track| song)?|器楽曲"]}'),
   '$.revision', json_extract(data,'$.revision') + 1,
   '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ','now')
 )

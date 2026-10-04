@@ -17,6 +17,25 @@ type Props = {
   onDraftChange: (draft: SongTagDraft | undefined) => void;
 };
 
+function overrideOf(
+  tag: SongTagEditorData["tags"][number],
+): ManualTagOverride {
+  if (
+    tag.manual_override === "auto" ||
+    tag.manual_override === "force_on" ||
+    tag.manual_override === "force_off"
+  )
+    return tag.manual_override;
+  return tag.manual_lock
+    ? tag.selected
+      ? "force_on"
+      : "force_off"
+    : "auto";
+}
+function autoSelectedOf(tag: SongTagEditorData["tags"][number]) {
+  return typeof tag.auto_selected === "boolean" ? tag.auto_selected : tag.selected;
+}
+
 export function SongTagEditor({
   api,
   record,
@@ -59,7 +78,7 @@ export function SongTagEditor({
         loadedScope.current = scope;
         setData(value);
         setOverrides(
-          new Map(value.tags.map((tag) => [tag.id, tag.manual_override])),
+          new Map(value.tags.map((tag) => [tag.id, overrideOf(tag)])),
         );
         onDraftChange({ version_id: value.version_id, changes: [] });
       })
@@ -131,13 +150,13 @@ export function SongTagEditor({
               {data.tags
                 .filter((t) => t.category === category)
                 .map((t) => {
-                  const override = overrides.get(t.id) ?? t.manual_override;
+                  const override = overrides.get(t.id) ?? overrideOf(t);
                   const effective =
                     override === "force_on"
                       ? true
                       : override === "force_off"
                         ? false
-                        : t.auto_selected;
+                        : autoSelectedOf(t);
                   return (
                     <label
                       className="manual-tag-choice manual-tag-choice-three-state"

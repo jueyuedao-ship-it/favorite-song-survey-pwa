@@ -413,7 +413,7 @@ export interface SongDetail {
   credits: (Credit & { entity: Entity; aliases: Alias[] })[];
   tags: (TagAssignment & { tag: Tag })[];
   sources: Source[];
-  tag_coverage: Record<TagCoverageGroup, TagCoverageStatus>;
+  tag_coverage?: Record<TagCoverageGroup, TagCoverageStatus>;
 }
 export interface RecordCandidates {
   response_id: string;
@@ -453,7 +453,7 @@ export interface Statistics {
   rankings: Ranking[];
   roles: Record<CreditRole, RoleCount[]>;
   weekly_tags: WeeklyTag[];
-  coverage: Record<
+  coverage?: Record<
     TagCoverageGroup,
     { complete: number; unavailable: number; unknown: number }
   >;

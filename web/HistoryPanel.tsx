@@ -307,7 +307,11 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
           </div>
           {song.tags.length ? <div className="tag-evidence-list">
             {song.tags.map((assignment) => {
-              const source = song.sources.find((item) => item.id === assignment.source_id);
+              const source = song.sources.find(
+                (item) =>
+                  item.id ===
+                  (assignment.source_id ?? assignment.automatic_source_id),
+              );
               const manual =
                 assignment.manual_override === "force_on" ||
                 assignment.manual_override === "force_off" ||
@@ -324,6 +328,11 @@ export function HistoryPanel({ api, participant, credential, online }: Props) {
                   <small>{manual ? "手動" : "自動"}{evidenceType ? ` · ${evidenceType}` : ""}</small>
                 </summary>
                 <p>{assignment.evidence}</p>
+                {manual && assignment.automatic_evidence && (
+                  <p className="muted-note">
+                    自動判定の根拠: {assignment.automatic_evidence}
+                  </p>
+                )}
                 {source && <p className="tag-source-meta">
                   <span>{qualityLabels[source.quality_tier ?? "unknown"]}</span>
                   <span>{source.quality_reason ?? "品質区分の理由は未記録"}</span>

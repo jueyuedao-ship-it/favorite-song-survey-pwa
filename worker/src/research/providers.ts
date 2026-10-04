@@ -289,21 +289,27 @@ export function researchSourceQuality(source: Evidence): {
   tier: SourceQualityTier;
   reason: string;
 } {
-  if (
-    source.recording_associations?.some(
-      (association) =>
-        association.provenance === "worker_verified_release_v1" &&
-        association.basis === "official_release",
-    )
-  )
-    return {
-      tier: "official",
-      reason: "Workerで公式リリースへの関連を検証済み",
-    };
   let host = "";
   try {
     host = new URL(source.url).hostname.toLowerCase();
   } catch {}
+  const verifiedRelease = source.recording_associations?.find(
+    (association) =>
+      association.provenance === "worker_verified_release_v1" &&
+      association.basis === "official_release",
+  );
+  const lnkArtist = host.endsWith(".lnk.to")
+    ? host.slice(0, -".lnk.to".length)
+    : "";
+  if (
+    verifiedRelease &&
+    lnkArtist &&
+    norm(lnkArtist) === norm(verifiedRelease.artist)
+  )
+    return {
+      tier: "official",
+      reason: "検証済みアーティスト名義の公式配信リンク",
+    };
   if (
     host === "open.spotify.com" ||
     host === "music.apple.com" ||
@@ -319,13 +325,16 @@ export function researchSourceQuality(source: Evidence): {
   if (host === "reddit.com" || host.endsWith(".reddit.com"))
     return { tier: "community", reason: "コミュニティ投稿" };
   if (
+    verifiedRelease ||
     source.recording_associations?.some(
       (association) => association.provenance === "worker_verified_song_v1",
     )
   )
     return {
       tier: "editorial",
-      reason: "対象曲を明示した解説本文をWorkerで曲単位に検証済み",
+      reason: verifiedRelease
+        ? "第三者ページ内の対象曲と公式配信先の対応をWorkerで検証済み"
+        : "対象曲を明示した解説本文をWorkerで曲単位に検証済み",
     };
   return { tier: "unknown", reason: "発行主体の品質区分を自動確認できない" };
 }

@@ -3224,7 +3224,7 @@ it("keeps admin-edited criteria while upgrading untouched generic initial defini
   const old = `Webの説明・公式情報で「${legacy.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
   await db
     .prepare("UPDATE tags SET data=? WHERE id=?")
-    .bind(JSON.stringify({ ...legacy, criterion: old }), legacy.id)
+    .bind(JSON.stringify({ ...legacy, criterion: old, revision: 1 }), legacy.id)
     .run();
   await db
     .prepare("UPDATE tags SET data=? WHERE id=?")
@@ -3437,7 +3437,7 @@ it("aligns fresh and migrated classical tag definition while preserving its ID/n
   const old = `Webの説明・公式情報で「${classical.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
   await db
     .prepare("UPDATE tags SET data=? WHERE id=?")
-    .bind(JSON.stringify({ ...classical, criterion: old }), classical.id)
+    .bind(JSON.stringify({ ...classical, criterion: old, revision: 1 }), classical.id)
     .run();
   await db.exec(
     (await readFile("worker/schema/0004_tag_criteria.sql", "utf8"))
@@ -4423,7 +4423,16 @@ it("publishes a release-article tag through worker association without accepting
     confirmed: true,
     source_id: expect.any(String),
   });
-  expect(assignments.find((tag) => tag.id === excluded.id)).toEqual(excluded);
+  expect(assignments.find((tag) => tag.id === excluded.id)).toMatchObject({
+    id: excluded.id,
+    version_id: excluded.version_id,
+    tag_id: excluded.tag_id,
+    confirmed: false,
+    manual_lock: true,
+    manual_override: "force_off",
+    evidence: excluded.evidence,
+    origin: excluded.origin,
+  });
   const tagSource = (await allRows(db, "sources")).find(
     (source) => source.id === assignments.find((tag) => tag.id !== excluded.id)?.source_id,
   );

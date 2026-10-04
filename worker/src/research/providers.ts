@@ -11,14 +11,25 @@ export interface Evidence {
   content: string;
   metadata?: RecordingMetadata;
   /** Worker-derived relation to the selected recording; never copied from provider JSON. */
-  recording_associations?: {
-    provenance: "worker_verified_release_v1";
-    reference_url: string;
-    basis: "official_release";
-    artist: string;
-    title_quote: string;
-    release_url: string;
-  }[];
+  recording_associations?: (
+    | {
+        provenance: "worker_verified_release_v1";
+        reference_url: string;
+        basis: "official_release";
+        artist: string;
+        title_quote: string;
+        release_url: string;
+      }
+    | {
+        provenance: "worker_verified_song_v1";
+        reference_url: string;
+        basis: "exact_song_recording";
+        artist: string;
+        song_title: string;
+        identity_quote: string;
+        description_quote: string;
+      }
+  )[];
 }
 export interface Claim {
   name: string;
@@ -252,6 +263,8 @@ export function linkedDescriptionRecording(source: Evidence, recording: string) 
   if (
     source.recording_associations?.some((association) => {
       try {
+        if (association.provenance === "worker_verified_song_v1")
+          return exactSongAssociationMatchesSource(source, association, recording);
         return (
           association.provenance === "worker_verified_release_v1" &&
           association.basis === "official_release" &&
@@ -337,15 +350,249 @@ const cleanRecordingText = (raw: string) => {
   return paragraphs;
 };
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function exactSongTitleIsSubject(text: string, title: string) {
+  const normalized = text.normalize("NFKC");
+  const escapedTitle = escapeRegExp(title.normalize("NFKC").trim());
+  if (!escapedTitle) return false;
+  // The title must be named as a song, single, track, or recording in the
+  // prose. This prevents a short title such as "Scatman" from matching only
+  // the artist name "Scatman John" or an unrelated title like "Scatman's World".
+  return new RegExp(
+    `(?:^|[^\\p{L}\\p{N}])["'“‘]?${escapedTitle}["'”’]?\\s+(?:is|was|became|becomes|remains|served\\s+as)\\s+(?:(?:a|an|the|his|her|their)\\s+)?(?:(?:[\\p{L}\\p{N}]+(?:[-’'][\\p{L}\\p{N}]+)?\\s+){0,6})(?:song|single|track|recording)\\b`,
+    "iu",
+  ).test(normalized);
+}
+
+function exactArtistMention(text: string, artist: string) {
+  const escapedArtist = escapeRegExp(artist.normalize("NFKC").trim());
+  if (!escapedArtist) return false;
+  return new RegExp(
+    `(?:^|[^\\p{L}\\p{N}])${escapedArtist}(?=$|[^\\p{L}\\p{N}])`,
+    "iu",
+  ).test(text.normalize("NFKC"));
+}
+
+function foreignNamedSongTitle(
+  sentence: string,
+  title: string,
+  artist: string,
+) {
+  const isForeignTitle = (candidate: string) => {
+    const normalized = norm(candidate);
+    return Boolean(
+      normalized &&
+        !/^(?:it|this|that|these|those|the|a|an|as|where|which|who)$/i.test(
+          normalized,
+        ) &&
+        !norm(title).includes(normalized) &&
+        normalized !== norm(artist),
+    );
+  };
+  const titleCasePhrase =
+    /^[\p{Lu}\p{Lt}][\p{L}\p{N}'’:&.-]*(?:\s+[\p{Lu}\p{Lt}][\p{L}\p{N}'’:&.-]*){0,4}$/u;
+  for (const [, quote] of sentence.matchAll(/["“‘]([^"“”‘’]{2,160})["”’]/gu)) {
+    if (titleCasePhrase.test(quote.trim()) && isForeignTitle(quote)) return true;
+  }
+  for (const match of sentence.matchAll(
+    /\b([\p{Lu}\p{Lt}][\p{L}\p{N}'’:&.-]*[’']s\s+[\p{Lu}\p{Lt}][\p{L}\p{N}'’:&.-]*(?:\s+[\p{Lu}\p{Lt}][\p{L}\p{N}'’:&.-]*){0,3})\b/gu,
+  )) {
+    if (isForeignTitle(match[1])) return true;
+  }
+  const relative = sentence.match(
+    /((?:[\p{Lu}\p{Lt}][\p{L}\p{N}'’:&.-]*\s+){1,4}[\p{Lu}\p{Lt}][\p{L}\p{N}'’:&.-]*)\s*,\s*(?:which|who|that)\b/u,
+  );
+  return Boolean(relative && isForeignTitle(relative[1]));
+}
+
+function hasOtherNamedSongSubject(
+  sentence: string,
+  title: string,
+  artist: string,
+) {
+  if (foreignNamedSongTitle(sentence, title, artist)) return true;
+  if (exactSongTitleIsSubject(sentence, title)) return false;
+  const quoted =
+    /["“‘][^"“”‘’]{2,160}["”’]\s+(?:is|was|became|becomes|remains)\s+(?:(?:a|an|the|his|her|their)\s+)?(?:(?:[\p{L}\p{N}]+(?:[-’'][\p{L}\p{N}]+)?\s+){0,6})(?:song|single|track|recording)\b/iu.test(
+      sentence,
+    );
+  const unquoted =
+    /^(?!(?:it|this|that|these|those|the|a|an|as|where|which)\b)(?:[\p{Lu}\p{Lt}][\p{L}\p{N}'’:&.-]*)(?:\s+[\p{Lu}\p{Lt}][\p{L}\p{N}'’:&.-]*){0,5}\s+(?:is|was|became|becomes|remains)\s+(?:(?:a|an|the|his|her|their)\s+)?(?:(?:[\p{L}\p{N}]+(?:[-’'][\p{L}\p{N}]+)?\s+){0,6})(?:song|single|track|recording)\b/iu.test(
+      sentence.trim(),
+    );
+  return quoted || unquoted;
+}
+
+function isSongScopedContinuation(sentence: string) {
+  const text = sentence.trim();
+  return (
+    /^(?:It|This|That|These|Those|Its|Their|The\s+(?:lyrics|song|track|recording|music|sound|groove|beat|rhythm|instrumentation|arrangement|chorus|verse|vocals?|voice|singing|tempo|bpm|mood|energy|genre|production|drum\s+machine))\b/i.test(
+      text,
+    ) ||
+    /^As\s+[^.!?]{1,100},\s+(?:the\s+(?:lyrics|song|track|recording|music|sound)|its|their)\b/i.test(
+      text,
+    )
+  );
+}
+
+function exactSongScopes(
+  text: string,
+  title: string,
+  artist: string,
+): { identity_quote: string; description_quote: string }[] {
+  if (alternateRecordingEdition.test(text)) return [];
+  const result: { identity_quote: string; description_quote: string }[] = [];
+  for (const paragraph of cleanRecordingText(text)) {
+    const sentences = paragraph
+      .split(/(?<=[.!?。！？])\s+/)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean);
+    const subject = sentences.findIndex((sentence) =>
+      exactSongTitleIsSubject(sentence, title),
+    );
+    if (subject < 0) continue;
+    if (hasOtherNamedSongSubject(sentences[subject], title, artist)) continue;
+    const scope = [sentences[subject]];
+    let artistBound = exactArtistMention(sentences[subject], artist);
+    let identityEnd = artistBound ? 0 : -1;
+    for (let index = subject + 1; index < sentences.length; index++) {
+      const sentence = sentences[index];
+      if (
+        hasOtherNamedSongSubject(sentence, title, artist) ||
+        !isSongScopedContinuation(sentence)
+      )
+        break;
+      scope.push(sentence);
+      if (!artistBound && exactArtistMention(sentence, artist)) {
+        artistBound = true;
+        identityEnd = scope.length - 1;
+      }
+    }
+    if (!artistBound) continue;
+    result.push({
+      identity_quote: scope.slice(0, identityEnd + 1).join(" "),
+      description_quote: scope.join(" "),
+    });
+  }
+  return result;
+}
+
+function exactSongIdentityQuote(text: string, title: string, artist: string) {
+  return exactSongScopes(text, title, artist).length > 0;
+}
+
+function exactSongDescriptionQuote(text: string, title: string, artist: string) {
+  return exactSongScopes(text, title, artist).some((scope) =>
+    descriptorSearchGroups.some((group) =>
+      group.cues.test(scope.description_quote),
+    ),
+  );
+}
+
+function rescopeExactSongAssociation(
+  association: Extract<
+    NonNullable<Evidence["recording_associations"]>[number],
+    { provenance: "worker_verified_song_v1" }
+  >,
+) {
+  const identity = exactSongScopes(
+    association.identity_quote,
+    association.song_title,
+    association.artist,
+  )[0]?.identity_quote;
+  const descriptions = exactSongScopes(
+    association.description_quote,
+    association.song_title,
+    association.artist,
+  )
+    .filter((scope) =>
+      descriptorSearchGroups.some((group) =>
+        group.cues.test(scope.description_quote),
+      ),
+    )
+    .map((scope) => scope.description_quote);
+  const selected: string[] = [];
+  for (const quote of descriptions) {
+    if (selected.some((old) => norm(old) === norm(quote))) continue;
+    if (`${selected.join("\n\n")}${selected.length ? "\n\n" : ""}${quote}`.length > 1200)
+      break;
+    selected.push(quote);
+  }
+  if (!identity || !selected.length) return null;
+  return {
+    identity_quote: identity,
+    description_quote: selected.join("\n\n"),
+  };
+}
+
+function validExactSongAssociation(
+  association: NonNullable<Evidence["recording_associations"]>[number],
+  recording: string,
+) {
+  if (association.provenance !== "worker_verified_song_v1") return false;
+  let reference: string | null;
+  try {
+    reference = catalogUrl(association.reference_url);
+  } catch {
+    return false;
+  }
+  return (
+    association.basis === "exact_song_recording" &&
+    reference === recording &&
+    association.artist.trim().length >= 2 &&
+    association.song_title.trim().length >= 2 &&
+    association.identity_quote.trim().length >= 3 &&
+    association.identity_quote.length <= 1200 &&
+    association.description_quote.trim().length >= 3 &&
+    association.description_quote.length <= 1200 &&
+    exactSongIdentityQuote(
+      association.identity_quote,
+      association.song_title,
+      association.artist,
+    ) &&
+    Boolean(rescopeExactSongAssociation(association))
+  );
+}
+
+function exactSongAssociationMatchesSource(
+  source: Evidence,
+  association: NonNullable<Evidence["recording_associations"]>[number],
+  recording: string,
+) {
+  if (
+    association.provenance !== "worker_verified_song_v1" ||
+    !validExactSongAssociation(association, recording)
+  )
+    return false;
+  const scoped = rescopeExactSongAssociation(association);
+  if (
+    !scoped ||
+    norm(association.identity_quote) !== norm(scoped.identity_quote) ||
+    norm(association.description_quote) !== norm(scoped.description_quote)
+  )
+    return false;
+  const content = norm(contentWithoutMetadata(source));
+  return (
+    content.includes(norm(scoped.identity_quote)) &&
+    content.includes(norm(scoped.description_quote))
+  );
+}
+
 const releaseTerms =
   /single|new song|release(?:d)?|distribution|available|track|配信|リリース|発売|新曲|シングル|楽曲紹介|作品紹介/i;
 const editionConflict =
   /\bcover(?:ed)?\b|\bremix(?:ed)?\b|\boff[- ]?vocal\b|\blive(?: version| recording)?\b|\bacoustic(?: version)?\b|カバー|リミックス|オフボーカル|ライブ|アコースティック/i;
+const alternateRecordingEdition =
+  /\bcover(?:ed)?\b|\bremix(?:ed)?\b|\boff[- ]?vocal\b|\blive(?:\s+(?:version|recording|performance))?\b|\bacoustic\s+version\b|\b(?:extended|radio|club|album)\s+(?:radio\s+)?(?:version|edit|mix|cut)\b|カバー|リミックス|オフボーカル|ライブ(?:\s*(?:版|バージョン|録音))?|アコースティック(?:\s*(?:版|バージョン))?/i;
 const editionKind = (text: string) => {
   if (/\bcover(?:ed)?\b|カバー/i.test(text)) return "cover";
   if (/\bremix(?:ed)?\b|リミックス/i.test(text)) return "remix";
   if (/\blive(?: version| recording)?\b|ライブ/i.test(text)) return "live";
   if (/\bacoustic(?: version)?\b|アコースティック/i.test(text)) return "acoustic";
+  if (/\b(?:extended|radio|club|album)\s+(?:radio\s+)?(?:version|edit|mix|cut)\b/i.test(text)) return "alternate";
   if (/\boff[- ]?vocal\b|オフボーカル/i.test(text)) return "instrumental";
   return "original";
 };
@@ -395,6 +642,40 @@ function primaryArtistAnchor(
   return null;
 }
 
+function selectedNativeSongTitle(
+  nativeTitle: string | undefined,
+  requestedTitle: string,
+  artist: string,
+) {
+  if (!nativeTitle?.trim() || !requestedTitle.trim()) return null;
+  let title = nativeTitle.normalize("NFKC").trim();
+  title = title
+    .replace(
+      /\s*\((?:official(?:\s+(?:music\s+)?video)?|music\s+video|audio|visualizer|lyrics?(?:\s+video)?|hd|4k|remastered(?:\s+version)?)[^)]*\)\s*$/i,
+      "",
+    )
+    .replace(
+      /\s+(?:official(?:\s+(?:music\s+)?video)?|music\s+video|audio|visualizer|lyrics?(?:\s+video)?|hd|4k|remastered(?:\s+version)?)\b.*$/i,
+      "",
+    )
+    .trim();
+  const escapedArtist = escapeRegExp(artist.normalize("NFKC").trim());
+  if (escapedArtist) {
+    title = title
+      .replace(new RegExp(`\\s+[-–—:]\\s+${escapedArtist}$`, "iu"), "")
+      .replace(new RegExp(`^${escapedArtist}\\s+[-–—:]\\s+`, "iu"), "")
+      .trim();
+  }
+  const escapedRequested = escapeRegExp(requestedTitle.normalize("NFKC").trim());
+  if (
+    !new RegExp(`^${escapedRequested}(?:\\s*\\([^()]{2,160}\\))?$`, "iu").test(
+      title,
+    )
+  )
+    return null;
+  return title;
+}
+
 /**
  * Adds a non-model-authored article-to-recording relation only when verified
  * primary metadata independently anchors the artist and an extracted single
@@ -414,13 +695,31 @@ export function associateOfficialReleaseEvidence(
   }
   const artist = primaryArtistAnchor(evidence, query);
   const primary = evidence.find((source) => source.url === recordingUrl);
+  const nativeSongTitle = selectedNativeSongTitle(
+    primary?.metadata?.title,
+    query.title,
+    artist ?? "",
+  );
   const nativeEdition = editionKind(
     `${primary?.metadata?.title ?? ""} ${query.title}`,
   );
-  return evidence.map((source) => {
+  const associated = evidence.map((source) => {
     const { recording_associations: previousAssociations = [], ...clean } = source;
     const previous = previousAssociations.filter((association) => {
       try {
+        if (association.provenance === "worker_verified_song_v1")
+          return (
+            trustedPersistedSourceIds.includes(source.id) &&
+            Boolean(recordingUrl) &&
+            Boolean(artist) &&
+            Boolean(nativeSongTitle) &&
+            !alternateRecordingEdition.test(
+              `${primary?.metadata?.title ?? ""} ${primary?.title ?? ""}`,
+            ) &&
+            norm(association.artist) === norm(artist!) &&
+            norm(association.song_title) === norm(nativeSongTitle!) &&
+            validExactSongAssociation(association, recordingUrl!)
+          );
         return (
           trustedPersistedSourceIds.includes(source.id) &&
           association.provenance === "worker_verified_release_v1" &&
@@ -563,6 +862,130 @@ export function associateOfficialReleaseEvidence(
       ],
     };
   });
+  return associateExactSongRecordingEvidence(
+    associated,
+    query,
+    rawTextByUrl,
+    trustedPersistedSourceIds,
+  );
+}
+
+/** Links only song-scoped description paragraphs to the native selected recording. */
+export function associateExactSongRecordingEvidence(
+  evidence: Evidence[],
+  query: { title: string; reference_url: string | null; artist_hint?: string | null },
+  rawTextByUrl: Record<string, string> = {},
+  trustedPersistedSourceIds: string[] = [],
+) {
+  let recordingUrl: string | null;
+  try {
+    recordingUrl = catalogUrl(query.reference_url);
+  } catch {
+    recordingUrl = null;
+  }
+  const artist = primaryArtistAnchor(evidence, query);
+  const primary = evidence.find((source) => source.url === recordingUrl);
+  const nativeSongTitle = selectedNativeSongTitle(
+    primary?.metadata?.title,
+    query.title,
+    artist ?? "",
+  );
+  const selectedTitle = `${primary?.metadata?.title ?? ""} ${primary?.title ?? ""} ${query.title}`;
+  const selectedEditionIsAmbiguous = alternateRecordingEdition.test(selectedTitle);
+
+  return evidence.map((source) => {
+    const previous = source.recording_associations?.flatMap((association) => {
+      try {
+        const trusted =
+          association.provenance === "worker_verified_song_v1" &&
+          trustedPersistedSourceIds.includes(source.id) &&
+          Boolean(recordingUrl) &&
+          Boolean(artist) &&
+          Boolean(nativeSongTitle) &&
+          !selectedEditionIsAmbiguous &&
+          norm(association.artist) === norm(artist!) &&
+          norm(association.song_title) === norm(nativeSongTitle!) &&
+          validExactSongAssociation(association, recordingUrl!);
+        if (!trusted || association.provenance !== "worker_verified_song_v1")
+          return [];
+        const scoped = rescopeExactSongAssociation(association);
+        return scoped ? [{ ...association, ...scoped }] : [];
+      } catch {
+        return [];
+      }
+    }) ?? [];
+    const official = source.recording_associations?.filter(
+      (association) => association.provenance === "worker_verified_release_v1",
+    ) ?? [];
+    const clean: Evidence = {
+      ...source,
+      ...(official.length || previous.length
+        ? { recording_associations: [...official, ...previous] }
+        : { recording_associations: undefined }),
+    };
+    if (
+      source.url === recordingUrl ||
+      !recordingUrl ||
+      !artist ||
+      !nativeSongTitle
+    )
+      return clean;
+    if (
+      selectedEditionIsAmbiguous ||
+      alternateRecordingEdition.test(source.title) ||
+      editionKind(source.title) !== "original"
+    )
+      return clean;
+
+    const text = rawTextByUrl[source.url] ?? source.content;
+    const paragraphs = cleanRecordingText(text);
+    const scopes = paragraphs.flatMap((paragraph) =>
+      exactSongScopes(paragraph, nativeSongTitle, artist!).filter(
+        (scope) =>
+          scope.description_quote.length <= 1200 &&
+          descriptorSearchGroups.some((group) =>
+            group.cues.test(scope.description_quote),
+          ),
+      ),
+    );
+    const descriptions = scopes.map((scope) => scope.description_quote);
+    if (previous.length) {
+      const prior = previous.find(
+        (association) => association.provenance === "worker_verified_song_v1",
+      )!;
+      const combinedQuotes = [prior.description_quote, ...descriptions].filter(
+        (quote, index, all) =>
+          quote.trim() &&
+          all.findIndex((candidate) => norm(candidate) === norm(quote)) === index,
+      );
+      const combinedDescription = combinedQuotes.join("\n\n");
+      if (combinedDescription.length > 1200) return clean;
+      const association = {
+        ...prior,
+        description_quote: combinedDescription,
+      };
+      return {
+        ...clean,
+        recording_associations: [...official, association],
+      };
+    }
+    if (linkedDescriptionRecording(clean, recordingUrl)) return clean;
+    const scope = scopes[0];
+    if (!scope || scope.identity_quote.length > 1200) return clean;
+    const association = {
+      provenance: "worker_verified_song_v1" as const,
+      reference_url: recordingUrl,
+      basis: "exact_song_recording" as const,
+      artist,
+      song_title: nativeSongTitle,
+      identity_quote: scope.identity_quote,
+      description_quote: scope.description_quote,
+    };
+    return {
+      ...clean,
+      recording_associations: [...official, association],
+    };
+  });
 }
 
 export function knownIdentitySchema(
@@ -589,11 +1012,28 @@ export function knownIdentitySchema(
       recordingTitleMatches(s.metadata.title, query.title) &&
       (!query.artist_hint || norm(s.content).includes(norm(query.artist_hint))),
   );
-  if (known)
+  if (known) {
     Object.assign((schema.properties as any).recordings, {
       minItems: 1,
       maxItems: 1,
     });
+    const identity = (schema.properties as any).recordings.items.properties;
+    identity.reference_url = {
+      ...identity.reference_url,
+      type: "string",
+      enum: [canonical],
+    };
+    identity.source_id = {
+      ...identity.source_id,
+      type: "string",
+      enum: [known.id],
+    };
+    identity.quote = {
+      ...identity.quote,
+      type: "string",
+      enum: [known.metadata!.title],
+    };
+  }
   return schema;
 }
 export const fieldHeader =
@@ -787,7 +1227,13 @@ export const tagCategoryGuidance: Record<string, string> = {
     "歌詞の内容を説明する文章で主題を確認する。歌詞の転載や単語の出現だけではテーマとみなさない。",
 };
 function descriptiveLines(source: Evidence) {
-  return independentText(source)
+  const exactAssociation = source.recording_associations?.find(
+    (association) => association.provenance === "worker_verified_song_v1",
+  );
+  const descriptionSource = exactAssociation
+    ? { ...source, content: exactAssociation.description_quote, metadata: undefined }
+    : source;
+  return independentText(descriptionSource)
     .split(/\r?\n/)
     .filter(
       (line) =>
@@ -864,6 +1310,16 @@ export function requestTokenEstimate(body: unknown) {
   return estimate + Number((body as any).max_completion_tokens ?? 0);
 }
 function associatedDescriptionWindow(source: Evidence, maxLength: number) {
+  const exactAssociation = source.recording_associations?.find(
+    (candidate) => candidate.provenance === "worker_verified_song_v1",
+  );
+  if (exactAssociation) {
+    const proof = [exactAssociation.identity_quote, exactAssociation.description_quote]
+      .filter((quote, index, all) => all.indexOf(quote) === index)
+      .join("\n\n");
+    const limit = Math.min(1000, Math.max(128, Math.trunc(maxLength)));
+    return proof.length <= limit ? proof : exactAssociation.description_quote.slice(0, limit);
+  }
   const association = source.recording_associations?.find(
     (candidate) =>
       candidate.provenance === "worker_verified_release_v1" &&
@@ -989,11 +1445,20 @@ export function fitInferenceRequest(body: any, evidence: Evidence[]) {
         title: source.title.slice(0, 80),
         ...(source.recording_associations?.length
           ? {
-            recording_associations: source.recording_associations.map(
-              (association) => ({
-                ...association,
-                title_quote: association.title_quote.slice(0, 96),
-              }),
+      recording_associations: source.recording_associations.map(
+              (association) =>
+                association.provenance === "worker_verified_song_v1"
+                  ? {
+                      provenance: association.provenance,
+                      reference_url: association.reference_url,
+                      basis: association.basis,
+                      artist: association.artist,
+                      song_title: association.song_title,
+                    }
+                  : {
+                      ...association,
+                      title_quote: association.title_quote.slice(0, 96),
+                    },
             ),
           }
           : {}),
@@ -1022,6 +1487,34 @@ export function fitInferenceRequest(body: any, evidence: Evidence[]) {
             compactGuidance[category] ?? guidance,
           ]),
       );
+    }
+    const tagArraySchema =
+      body.response_format?.json_schema?.schema?.properties?.recordings?.items
+        ?.properties?.tags;
+    if (tagArraySchema?.items?.properties?.tag_id) {
+      const candidateIds = [
+        ...new Set(
+          input.tags
+            .map((tag: any) => tag?.id)
+            .filter((id: unknown): id is string => typeof id === "string" && id.length > 0),
+        ),
+      ];
+      const tagIdSchema = tagArraySchema.items.properties.tag_id;
+      if (candidateIds.length) {
+        tagArraySchema.items.properties.tag_id = {
+          ...tagIdSchema,
+          type: "string",
+          enum: candidateIds,
+        };
+        tagArraySchema.maxItems = Math.min(tagArraySchema.maxItems ?? 12, 12);
+      } else {
+        const { enum: _enum, ...freeTagIdSchema } = tagIdSchema;
+        tagArraySchema.items.properties.tag_id = {
+          ...freeTagIdSchema,
+          type: "string",
+        };
+        tagArraySchema.maxItems = 0;
+      }
     }
     body.messages[1].content = JSON.stringify(input);
   };
@@ -1381,8 +1874,8 @@ const seedTagSignals: Record<string, RegExp> = {
   "tag-04": /ポップロック|\bpop\s*[-–]?\s*rock\b|ポップ.{0,16}ロック/i,
   "tag-05": /\br\s*&\s*b\b|リズム[＆&]ブルース|rhythm and blues/i,
   "tag-06": /ヒップホップ|\bhip[ -]?hop\b|ラップ.{0,24}(?:ビート|中心)|rap.{0,24}beat/i,
-  "tag-07": /エレクトロ|電子音|\belectronic(?: music)?\b|シンセ.{0,20}(?:主体|中心|サウンド)|synth(?:sizer)?[- ](?:based|pop|driven)/i,
-  "tag-08": /ダンスポップ|\bdance[ -]?pop\b|\bpop.{0,16}dance.{0,16}(?:tune|track|song)\b|ポップなダンスチューン|ポップ.{0,16}ダンス.{0,16}(?:ビート|チューン)|踊れるビート.{0,24}ポップ/i,
+  "tag-07": /エレクトロ|電子音|\belectronic(?: music)?\b|\bsynthpop\b|シンセ.{0,20}(?:主体|中心|サウンド)|synth(?:sizer)?[- ](?:based|pop|driven)/i,
+  "tag-08": /ダンスポップ|\bdance[ -]?pop\b|\bsynthpop\s+dance\s+(?:song|track|tune)\b|\bpop.{0,16}dance.{0,16}(?:tune|track|song)\b|ポップなダンスチューン|ポップ.{0,16}ダンス.{0,16}(?:ビート|チューン)|踊れるビート.{0,24}ポップ/i,
   "tag-09": /ジャズ|\bjazz\b|スウィング|\bswing\b|即興演奏|\bimprovisation\b/i,
   "tag-10": /フォーク|\bfolk(?: music)?\b/i,
   "tag-11": /クラシック|\bclassical(?: music)?\b|西洋芸術音楽/i,
@@ -1495,7 +1988,7 @@ function hasSongPropertyContext(text: string, signal: RegExp) {
   const scenery =
     /会場|ライブ|舞台|照明|ライティング|ライト|天気|天候|春風|風|気温|気候|景色|観客|客席|フェス|\bvenue\b|\bstage\b|\blighting\b|\blights\b|\bweather\b|\bcrowd\b|\baudience\b|\bfestival\b|\boutside\b|\bbreeze\b/i;
   const musicObject =
-    /曲調|サウンド|音楽|メロディ|楽曲|音色|響き|トラック|歌声|\bsong\b|\bmusic\b|\bmelody\b|\bsound\b|\barrangement\b|\btrack\b|\btone\b/i;
+    /曲調|サウンド|音楽|メロディ|楽曲|音色|響き|トラック|歌声|\bsong\b|\bmusic\b|\bmelody\b|\bsound\b|\barrangement\b|\btrack\b|\btone\b|\bgroove\b|\bdrum machine\b|\bdrums?\b|\bpercussion\b/i;
   const broadMusicObject =
     /演奏|パフォーマンス|リズム|ビート|テンポ|\bperformance\b|\brhythm\b|\bbeat\b|\btempo\b/i;
   for (const match of text.matchAll(matches)) {
@@ -1734,6 +2227,7 @@ export function supportedAnalysis(
   evidence: Evidence[],
   query: Parameters<typeof validateAnalysis>[2],
   tags: Parameters<typeof validateAnalysis>[3],
+  allowSelectedNativeFallback = false,
 ): Analysis {
   let parsed: any;
   try {
@@ -1755,12 +2249,24 @@ export function supportedAnalysis(
   )
     throw new ResearchError("UNSUPPORTED_EVIDENCE");
   // A model's empty answer must not hide recordings independently identified by
-  // native metadata. With no supplied URL, require the artist hint in native
+  // native metadata. Without a selected URL, require the artist hint in native
   // title/author fields; description mentions alone cannot establish identity.
   // Keep these as unclassified candidates: native metadata never proves roles,
   // original/cover relationships or sound tags (except the exact uploader).
+  let selectedRecordingUrl: string | null = null;
+  try {
+    selectedRecordingUrl = query.reference_url
+      ? catalogUrl(query.reference_url)
+      : null;
+  } catch {
+    selectedRecordingUrl = null;
+  }
   const nativeFallback =
-    !parsed.recordings.length && Boolean(query.artist_hint?.trim());
+    !parsed.recordings.length &&
+    Boolean(
+      query.artist_hint?.trim() ||
+        (allowSelectedNativeFallback && selectedRecordingUrl),
+    );
   if (nativeFallback) {
     const recovered: Recording[] = [];
     for (const s of evidence) {
@@ -1769,8 +2275,12 @@ export function supportedAnalysis(
         !m ||
         m.provider !== "youtube_oembed" ||
         m.endpoint !== youtubeMetadataEndpoint(s.url) ||
+        (allowSelectedNativeFallback &&
+          selectedRecordingUrl &&
+          s.url !== selectedRecordingUrl) ||
         !recordingTitleMatches(m.title, query.title) ||
-        !norm(`${m.title} ${m.author_name}`).includes(norm(query.artist_hint!))
+        (query.artist_hint &&
+          !norm(`${m.title} ${m.author_name}`).includes(norm(query.artist_hint)))
       )
         continue;
       const r: Recording = {

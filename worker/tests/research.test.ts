@@ -4383,7 +4383,7 @@ it("publishes a release-article tag through worker association without accepting
   expect(await allRows(db, "credits")).toHaveLength(0);
 });
 
-it("marks a legacy inference job with the current analysis version before calling Groq", async () => {
+it("marks a legacy inference job with the current analysis version and skips an empty tag request", async () => {
   const work = newRow({ title: "Blue Song", manual_lock: false });
   const version: Version = newRow({
     work_id: work.id,
@@ -4464,7 +4464,300 @@ it("marks a legacy inference job with the current analysis version before callin
   job = (await allRows(db, "research_jobs"))[0];
   expect(job.stage).toBe("catalog");
   expect(job.analysis_version).toBe("2");
+  expect(groqCalls).toBe(0);
+  expect(job.analysis?.recordings[0]).toMatchObject({
+    reference_url: url,
+    kind: "other",
+    credits: [{ role: "uploader", name: "Singer" }],
+    tags: [],
+  });
+  expect(job.analysis?.review_warnings).toContain("NO_SUPPORTED_TAG_DESCRIPTIONS");
+});
+
+it("keeps a selected native recording as an uploader candidate when no tag definitions fit", async () => {
+  const scatmanUrl = "https://www.youtube.com/watch?v=Hy8kmNEo1i8";
+  const work = newRow({ title: "Scatman", manual_lock: false });
+  const version: Version = newRow({
+    work_id: work.id,
+    title: "Scatman",
+    kind: "original",
+    reference_url: scatmanUrl,
+    uploader_entity_id: null,
+    research_status: "queued",
+    manual_lock: false,
+  });
+  await insert("works", work);
+  await insert("versions", version);
+  const metadata = {
+    provider: "youtube_oembed" as const,
+    endpoint: `https://www.youtube.com/oembed?url=${encodeURIComponent(scatmanUrl)}&format=json`,
+    title: "Scatman (ski-ba-bop-ba-dop-bop) Official Video HD - Scatman John",
+    author_name: "Scatman John Official YouTube Channel",
+  };
+  const selected = {
+    ...researchJob(version),
+    purpose: "tag_enrichment" as const,
+    analysis_version: "2",
+    query: {
+      title: "Scatman",
+      artist_hint: null,
+      reference_url: scatmanUrl,
+    },
+    stage: "infer" as const,
+    descriptive_coverage: {
+      genre_sound: "complete" as const,
+      mood_energy_tempo: "complete" as const,
+      voice: "complete" as const,
+      lyric_theme: "complete" as const,
+    },
+    evidence: [
+      {
+        id: "s0",
+        url: scatmanUrl,
+        title: metadata.title,
+        metadata,
+        content: JSON.stringify(metadata),
+      },
+    ],
+  };
+  await insert("research_jobs", selected);
+  const usage = await insert(
+    "usage",
+    newRow({
+      month: "2026-10",
+      tavily_credits: 0,
+      tavily_credit_cap: 800,
+      groq_requests: 0,
+      last_error: null,
+    }),
+  );
+  let groqCalls = 0;
+  const f = (async (input: any) => {
+    if (String(input).includes("api.groq.com")) {
+      groqCalls++;
+      return json({
+        choices: [{ message: { content: JSON.stringify({ recordings: [] }) } }],
+      });
+    }
+    return json({});
+  }) as typeof fetch;
+
+  for (let i = 0; i < 12; i++) await run(env(), undefined, f);
+
+  const job = (await allRows(db, "research_jobs")).find(
+    (candidate) => candidate.id === selected.id,
+  )!;
+  expect(groqCalls).toBe(0);
+  expect(job.stage).toBe("done");
+  expect(job.status).toBe("needs_review");
+  expect(job.analysis?.recordings).toHaveLength(1);
+  expect(job.analysis?.recordings[0]).toMatchObject({
+    reference_url: scatmanUrl,
+    kind: "other",
+    credits: [
+      {
+        role: "uploader",
+        name: "Scatman John Official YouTube Channel",
+      },
+    ],
+    tags: [],
+  });
+  expect(job.analysis?.review_warnings).toContain("NO_SUPPORTED_TAG_DESCRIPTIONS");
+  expect((await allRows(db, "usage")).find((row) => row.id === usage.id)?.groq_requests).toBe(0);
+});
+
+it("preserves verified song-scoped evidence while another source is category-extracted", async () => {
+  const { associateOfficialReleaseEvidence, linkedDescriptionRecording } =
+    await import("../src/research/providers");
+  const scatmanUrl = "https://www.youtube.com/watch?v=Hy8kmNEo1i8";
+  const articleUrl = "https://en.wikipedia.org/wiki/Scatman_(Ski-Ba-Bop-Ba-Dop-Bop)";
+  const query = {
+    title: "Scatman",
+    artist_hint: "Scatman John",
+    reference_url: scatmanUrl,
+  };
+  const metadata = {
+    provider: "youtube_oembed" as const,
+    endpoint: `https://www.youtube.com/oembed?url=${encodeURIComponent(scatmanUrl)}&format=json`,
+    title: "Scatman (ski-ba-bop-ba-dop-bop) Official Video HD - Scatman John",
+    author_name: "Scatman John Official YouTube Channel",
+  };
+  const primary = {
+    id: "s0",
+    url: scatmanUrl,
+    title: metadata.title,
+    metadata,
+    content: JSON.stringify(metadata),
+  };
+  const firstDescription =
+    '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a novelty synthpop dance song with a quirky Euro-NRG tone.';
+  const artistContinuation =
+    "As critics summarized, the lyrics contain spoken word and scatting, where Scatman John bends his tongue to rapid effect.";
+  const secondDescription =
+    'This is driven by a rapid techno groove and pitter-pattering drum machine.';
+  const rawArticle = `## Composition\n\n${firstDescription} ${artistContinuation} ${secondDescription}`;
+  const article = {
+    id: "s4",
+    url: articleUrl,
+    title: "Scatman (Ski-Ba-Bop-Ba-Dop-Bop) - Wikipedia",
+    content: rawArticle,
+  };
+  const associatedArticle = associateOfficialReleaseEvidence(
+    [primary, article],
+    query,
+    { [articleUrl]: rawArticle },
+  )[1];
+  const songAssociation = associatedArticle.recording_associations?.find(
+    (association) => association.provenance === "worker_verified_song_v1",
+  );
+  expect(songAssociation).toBeDefined();
+  const partialArticle = {
+    ...associatedArticle,
+    content: songAssociation!.identity_quote,
+  };
+  const work = newRow({ title: "Scatman", manual_lock: false });
+  const version: Version = newRow({
+    work_id: work.id,
+    title: "Scatman",
+    kind: "original",
+    reference_url: scatmanUrl,
+    uploader_entity_id: null,
+    research_status: "queued",
+    manual_lock: false,
+  });
+  await insert("works", work);
+  await insert("versions", version);
+  const target = {
+    id: "s1",
+    url: "https://example.com/scatman-voice",
+    title: "Scatman voice description",
+    content: "A song description.",
+  };
+  const selected = {
+    ...researchJob(version),
+    purpose: "tag_enrichment" as const,
+    analysis_version: "2",
+    query,
+    stage: "describe_extract" as const,
+    descriptive_category: "voice",
+    descriptive_source_ids: [target.id],
+    evidence: [primary, target, partialArticle],
+  };
+  await insert("research_jobs", selected);
+  const f = (async (input: any) => {
+    const targetUrl = String(input);
+    if (targetUrl.endsWith("/usage"))
+      return json({
+        account: {
+          current_plan: "Researcher",
+          plan_usage: 0,
+          plan_limit: 1000,
+          paygo_usage: 0,
+        },
+        key: { usage: 0, limit: 1000 },
+      });
+    if (targetUrl.endsWith("/extract"))
+      return json({
+        results: [{ url: target.url, raw_content: "A bright human vocal performance." }],
+      });
+    return json({});
+  }) as typeof fetch;
+
+  await run(env(), undefined, f);
+
+  const saved = (await allRows(db, "research_jobs")).find(
+    (candidate) => candidate.id === selected.id,
+  )!;
+  const retainedArticle = saved.evidence?.find((source) => source.id === "s4")!;
+  expect(saved.stage).toBe("infer");
+  expect(retainedArticle.recording_associations?.[0]?.provenance).toBe(
+    "worker_verified_song_v1",
+  );
+  expect(retainedArticle.content).toContain(secondDescription);
+  expect(linkedDescriptionRecording(retainedArticle, scatmanUrl)).toBe(true);
+});
+
+it("still runs candidate lookup inference when no tag definitions fit", async () => {
+  const r = await answer("Scatman");
+  const currentJob = (await allRows(db, "research_jobs"))[0];
+  const scatmanUrl = "https://www.youtube.com/watch?v=Hy8kmNEo1i8";
+  const metadata = {
+    provider: "youtube_oembed" as const,
+    endpoint: `https://www.youtube.com/oembed?url=${encodeURIComponent(scatmanUrl)}&format=json`,
+    title: "Scatman (ski-ba-bop-ba-dop-bop) Official Video HD - Scatman John",
+    author_name: "Scatman John Official YouTube Channel",
+  };
+  const selected = {
+    ...currentJob,
+    purpose: "candidate_lookup" as const,
+    response_revision: r.revision,
+    analysis_version: "2",
+    query: {
+      title: "Scatman",
+      artist_hint: "Scatman John",
+      reference_url: scatmanUrl,
+    },
+    stage: "infer" as const,
+    status: "queued" as const,
+    next_attempt_at: "2000-01-01T00:00:00Z",
+    lease_until: null,
+    descriptive_coverage: {
+      genre_sound: "complete" as const,
+      mood_energy_tempo: "complete" as const,
+      voice: "complete" as const,
+      lyric_theme: "complete" as const,
+    },
+    evidence: [
+      {
+        id: "s0",
+        url: scatmanUrl,
+        title: metadata.title,
+        metadata,
+        content: JSON.stringify(metadata),
+      },
+    ],
+  };
+  await db
+    .prepare("UPDATE research_jobs SET data=? WHERE id=?")
+    .bind(JSON.stringify(selected), selected.id)
+    .run();
+  let groqCalls = 0;
+  const f = (async (input: any) => {
+    if (String(input).includes("api.groq.com")) {
+      groqCalls++;
+      return json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                recordings: [
+                  {
+                    title: metadata.title,
+                    reference_url: scatmanUrl,
+                    kind: "other",
+                    source_id: "s0",
+                    quote: metadata.title,
+                    credits: [],
+                    tags: [],
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      });
+    }
+    return json({});
+  }) as typeof fetch;
+
+  await run(env(), undefined, f);
+
+  const job = (await allRows(db, "research_jobs")).find(
+    (candidate) => candidate.id === r.id || candidate.id === selected.id,
+  )!;
+  expect(job.stage).toBe("catalog");
   expect(groqCalls).toBe(1);
+  expect(job.analysis?.recordings[0].reference_url).toBe(scatmanUrl);
 });
 
 it("moves a legacy generic descriptor extraction into the independent group cycle", async () => {

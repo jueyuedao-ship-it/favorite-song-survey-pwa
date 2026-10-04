@@ -1552,12 +1552,11 @@ it("fits a real-shaped 50-tag request without losing the associated article or i
 
   expect(requestTokenEstimate(fitted.body)).toBeLessThanOrEqual(7600);
   expect(fitted.evidence.map((source) => source.id)).toEqual(["s0", "s2"]);
-  expect(fittedArticle?.recording_associations?.[0].release_url).toBe(
-    "https://tayori.lnk.to/Mirage",
+  const releaseAssociation = fittedArticle?.recording_associations?.find(
+    (association) => association.provenance === "worker_verified_release_v1",
   );
-  expect(fittedArticle?.recording_associations?.[0].title_quote).toContain(
-    "Digital Single「蜃気楼」",
-  );
+  expect(releaseAssociation?.release_url).toBe("https://tayori.lnk.to/Mirage");
+  expect(releaseAssociation?.title_quote).toContain("Digital Single「蜃気楼」");
   expect(fittedArticle?.content).toContain("エレクトロニックなサウンドに");
   expect(fittedArticle?.content).toContain("軽やかで明るいサウンド");
   expect(fittedArticle?.content).toContain("透明感に満ちたボーカル・isuiの歌声");
@@ -1808,4 +1807,532 @@ it("keeps a singleton native metadata object out of ordinary credit prose after 
   expect(analysis.review_warnings).toContain(
     "recording:0:credit:0:UNSUPPORTED_EVIDENCE",
   );
+});
+
+it("associates only exact song-scoped recording prose without trusting page titles or related tracks", async () => {
+  const {
+    associateOfficialReleaseEvidence,
+    fitInferenceRequest,
+    linkedDescriptionRecording,
+    linkedRecording,
+  } = await import("../src/research/providers");
+  const scatmanUrl = "https://www.youtube.com/watch?v=Hy8kmNEo1i8";
+  const articleUrl = "https://en.wikipedia.org/wiki/Scatman_(Ski-Ba-Bop-Ba-Dop-Bop)";
+  const query = {
+    title: "Scatman",
+    artist_hint: "Scatman John",
+    reference_url: scatmanUrl,
+  };
+  const metadata = {
+    provider: "youtube_oembed" as const,
+    endpoint: `https://www.youtube.com/oembed?url=${encodeURIComponent(scatmanUrl)}&format=json`,
+    title: "Scatman (ski-ba-bop-ba-dop-bop) Official Video HD - Scatman John",
+    author_name: "Scatman John Official YouTube Channel",
+  };
+  const primary = {
+    id: "s0",
+    url: scatmanUrl,
+    title: metadata.title,
+    metadata,
+    content: JSON.stringify(metadata),
+  };
+  const composition =
+    '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a novelty synthpop dance song with a quirky Euro-NRG tone. As critics summarized, the lyrics contain portions of spoken word, rapping, and a "jaunty ragga" style of scatting, where Scatman John "bends his tongue to rapid, ear-popping effect". This is driven by the "hellacious" techno groove of its extremely-fast, pitter-pattering chintzy drum machine.';
+  const rawArticle = [
+    "## Composition",
+    composition,
+    "## Artist biography",
+    "Scatman John released many songs and his artist bio describes an upbeat career.",
+    "## Related tracks",
+    '"Scatman\'s World" is a slow acoustic ballad unrelated to this recording.',
+  ].join("\n\n");
+  const japaneseArticle = {
+    id: "s1",
+    url: "https://ja.wikipedia.org/wiki/%E3%82%B9%E3%82%AD%E3%83%A3%E3%83%83%E3%83%88%E3%83%9E%E3%83%B3_(%E6%9B%B2)",
+    title: "スキャットマン (曲) - Wikipedia",
+    content:
+      "「スキャットマン」（英語: Scatman (Ski-Ba-Bop-Ba-Dop-Bop)）は、スキャットマン・ジョンの楽曲である。ジョンのデビュー・シングルである。",
+  };
+  const alternate = {
+    id: "s2",
+    url: "https://example.com/scatman-extended-radio",
+    title: "Scatman (Extended Radio Version)",
+    content:
+      '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop) Extended Radio Version" is a dance song by Scatman John.',
+  };
+  const article = {
+    id: "s3",
+    url: articleUrl,
+    title: "Scatman (Ski-Ba-Bop-Ba-Dop-Bop) - Wikipedia",
+    content: rawArticle,
+  };
+  const artistPage = {
+    id: "s4",
+    url: "https://example.com/artist/scatman-john",
+    title: "Scatman John — artist profile",
+    content: "Scatman John is an artist. Scatman's World is a dance song.",
+  };
+  const commentary = {
+    id: "s5",
+    url: "https://example.com/video-commentary/scatman",
+    title: 'ONE HIT WONDERLAND: "Scatman" by Scatman John',
+    content:
+      "The host discusses Scatman John and the story behind his lyrics in this retrospective video.",
+  };
+  const spotify = {
+    id: "s6",
+    url: "https://open.spotify.com/track/1234567890123456789012",
+    title: "Scatman (ski-ba-bop-ba-dop-bop) - song and lyrics by Scatman John",
+    content: "United States. Crazy (feat. Scatman John).",
+  };
+  const misleadingSubtitle = {
+    id: "s7",
+    url: "https://example.com/scatman-different-song",
+    title: "Scatman (Another Song)",
+    content:
+      '"Scatman (Another Song)" is a synthpop dance song by Scatman John.',
+  };
+  const associated = associateOfficialReleaseEvidence(
+    [primary, japaneseArticle, alternate, article, artistPage, commentary, spotify, misleadingSubtitle],
+    query,
+    { [articleUrl]: rawArticle },
+  );
+  const bound = associated.find((source) => source.id === "s3")!;
+  const fitted = fitInferenceRequest(
+    {
+      max_completion_tokens: 3200,
+      messages: [
+        { role: "system", content: "Use cited evidence only." },
+        {
+          role: "user",
+          content: JSON.stringify({ query, sources: associated, tags: [] }),
+        },
+      ],
+    },
+    associated,
+  );
+  const fittedArticle = fitted.evidence.find((source) => source.id === "s3")!;
+
+  expect(bound.recording_associations?.[0]).toMatchObject({
+    provenance: "worker_verified_song_v1",
+    basis: "exact_song_recording",
+    reference_url: scatmanUrl,
+    artist: "Scatman John",
+    song_title: "Scatman (ski-ba-bop-ba-dop-bop)",
+  });
+  expect(linkedRecording(bound, scatmanUrl)).toBe(false);
+  expect(linkedDescriptionRecording(bound, scatmanUrl)).toBe(true);
+  expect(fitted.evidence.map((source) => source.id)).toEqual(["s0", "s3"]);
+  expect(
+    associated
+      .slice(1)
+      .filter((source) => source.id !== "s3")
+      .filter((source) => source.recording_associations?.length)
+      .map((source) => source.id),
+  ).toEqual([]);
+  expect(fittedArticle.content).toContain("novelty synthpop dance song");
+  expect(fittedArticle.content).not.toContain("artist bio");
+  expect(fittedArticle.content).not.toContain("Scatman's World");
+});
+
+it("finds only explicit synthpop and synthpop dance song tags in genre evidence", async () => {
+  const { inferenceTagCandidates } = await import("../src/research/providers");
+  const definitions = [
+    {
+      id: "tag-07",
+      name: "エレクトロ",
+      category: "ジャンル",
+      criterion:
+        "Webの説明・公式情報で「エレクトロ」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。",
+    },
+    {
+      id: "tag-08",
+      name: "ダンスポップ",
+      category: "ジャンル",
+      criterion:
+        "Webの説明・公式情報で「ダンスポップ」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。",
+    },
+  ];
+  const explicitDance = {
+    id: "s1",
+    url: "https://example.com/scatman",
+    title: "Scatman composition",
+    content:
+      '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a novelty synthpop dance song driven by a techno groove.',
+  };
+  const eurodanceOnly = {
+    ...explicitDance,
+    content: '"Scatman" is an Eurodance song.',
+  };
+
+  expect(
+    inferenceTagCandidates(definitions, [explicitDance], "https://example.com/scatman").map((tag) => tag.id),
+  ).toEqual(["tag-07", "tag-08"]);
+  expect(
+    inferenceTagCandidates(definitions, [eurodanceOnly], "https://example.com/scatman").map((tag) => tag.id),
+  ).toEqual([]);
+});
+
+it("rejects an exact-song association marker that was not derived from retained source text", async () => {
+  const { associateOfficialReleaseEvidence, linkedDescriptionRecording } =
+    await import("../src/research/providers");
+  const scatmanUrl = "https://www.youtube.com/watch?v=Hy8kmNEo1i8";
+  const query = {
+    title: "Scatman",
+    artist_hint: "Scatman John",
+    reference_url: scatmanUrl,
+  };
+  const metadata = {
+    provider: "youtube_oembed" as const,
+    endpoint: `https://www.youtube.com/oembed?url=${encodeURIComponent(scatmanUrl)}&format=json`,
+    title: "Scatman (ski-ba-bop-ba-dop-bop) Official Video HD - Scatman John",
+    author_name: "Scatman John Official YouTube Channel",
+  };
+  const primary = {
+    id: "s0",
+    url: scatmanUrl,
+    title: metadata.title,
+    metadata,
+    content: JSON.stringify(metadata),
+  };
+  const source = {
+    id: "s8",
+    url: "https://example.com/scatman-profile",
+    title: "Scatman (Ski-Ba-Bop-Ba-Dop-Bop) — artist profile",
+    content: "Scatman John is an artist with an international discography.",
+    recording_associations: [
+      {
+        provenance: "worker_verified_song_v1" as const,
+        reference_url: scatmanUrl,
+        basis: "exact_song_recording" as const,
+        artist: "Scatman John",
+        song_title: "Scatman (ski-ba-bop-ba-dop-bop)",
+        identity_quote:
+          '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a novelty synthpop dance song by Scatman John.',
+        description_quote:
+          '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a novelty synthpop dance song by Scatman John.',
+      },
+    ],
+  };
+  const checked = associateOfficialReleaseEvidence([primary, source], query)[1];
+
+  expect(checked.recording_associations).toBeUndefined();
+  expect(linkedDescriptionRecording(checked, scatmanUrl)).toBe(false);
+});
+
+it("does not import genre evidence from another named song later in the same paragraph", async () => {
+  const {
+    associateOfficialReleaseEvidence,
+    inferenceTagCandidates,
+    linkedDescriptionRecording,
+  } =
+    await import("../src/research/providers");
+  const scatmanUrl = "https://www.youtube.com/watch?v=Hy8kmNEo1i8";
+  const query = {
+    title: "Scatman",
+    artist_hint: "Scatman John",
+    reference_url: scatmanUrl,
+  };
+  const metadata = {
+    provider: "youtube_oembed" as const,
+    endpoint: `https://www.youtube.com/oembed?url=${encodeURIComponent(scatmanUrl)}&format=json`,
+    title: "Scatman (ski-ba-bop-ba-dop-bop) Official Video HD - Scatman John",
+    author_name: "Scatman John Official YouTube Channel",
+  };
+  const primary = {
+    id: "s0",
+    url: scatmanUrl,
+    title: metadata.title,
+    metadata,
+    content: JSON.stringify(metadata),
+  };
+  const otherSongParagraphs = [
+    '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a song by Scatman John. "Scatman\'s World" is a synthpop dance song.',
+    '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a jazz song by Another Artist. "Scatman\'s World" is a synthpop dance song by Scatman John.',
+    '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a song by Scatman John. Scatman’s World, which is a synthpop dance tune, was another hit.',
+    '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a song by Scatman John, while "Scatman’s World" is a synthpop dance song.',
+    '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a song by Scatman John. "World" is a synthpop dance track.',
+  ];
+  const tags = [
+    {
+      id: "tag-07",
+      name: "エレクトロ",
+      category: "ジャンル",
+      criterion: "電子音やシンセ主体のサウンド。",
+    },
+    {
+      id: "tag-08",
+      name: "ダンスポップ",
+      category: "ジャンル",
+      criterion: "踊れるビートとポップなメロディの融合。",
+    },
+    {
+      id: "tag-03",
+      name: "ロック",
+      category: "ジャンル",
+      criterion: "ギターやドラム主体のロック演奏。",
+    },
+  ];
+
+  for (const [index, content] of otherSongParagraphs.entries()) {
+    const article = {
+      id: `s${index + 1}`,
+      url: `https://en.wikipedia.org/wiki/Scatman_fixture_${index + 1}`,
+      title: "Scatman song description",
+      content,
+    };
+    const checked = associateOfficialReleaseEvidence(
+      [primary, article],
+      query,
+      { [article.url]: content },
+    );
+
+    expect(checked[1].recording_associations).toBeUndefined();
+    expect(inferenceTagCandidates(tags, checked, scatmanUrl)).toEqual([]);
+  }
+
+  const mixedParagraph =
+    '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a synthpop dance song by Scatman John. Scatman’s World, which is a heavy metal rock tune, was another hit.';
+  const articleUrl = "https://en.wikipedia.org/wiki/Scatman_mixed_description";
+  const article = {
+    id: "s7",
+    url: articleUrl,
+    title: "Scatman song description",
+    content: mixedParagraph,
+  };
+  const priorAssociation = {
+    provenance: "worker_verified_song_v1" as const,
+    reference_url: scatmanUrl,
+    basis: "exact_song_recording" as const,
+    artist: "Scatman John",
+    song_title: "Scatman (ski-ba-bop-ba-dop-bop)",
+    identity_quote: mixedParagraph,
+    description_quote: mixedParagraph,
+  };
+  const revalidated = associateOfficialReleaseEvidence(
+    [primary, { ...article, recording_associations: [priorAssociation] }],
+    query,
+    {},
+    [article.id],
+  );
+  const scoped = revalidated[1].recording_associations?.find(
+    (association) => association.provenance === "worker_verified_song_v1",
+  );
+
+  expect(scoped?.identity_quote).not.toContain("Scatman’s World");
+  expect(scoped?.description_quote).not.toContain("Scatman’s World");
+  expect(linkedDescriptionRecording(revalidated[1], scatmanUrl)).toBe(true);
+  expect(inferenceTagCandidates(tags, revalidated, scatmanUrl).map((tag) => tag.id)).toEqual([
+    "tag-07",
+    "tag-08",
+  ]);
+});
+
+it("keeps explicit tempo and vocal properties in selected-song continuations", async () => {
+  const { associateOfficialReleaseEvidence, inferenceTagCandidates } =
+    await import("../src/research/providers");
+  const scatmanUrl = "https://www.youtube.com/watch?v=Hy8kmNEo1i8";
+  const query = {
+    title: "Scatman",
+    artist_hint: "Scatman John",
+    reference_url: scatmanUrl,
+  };
+  const metadata = {
+    provider: "youtube_oembed" as const,
+    endpoint: `https://www.youtube.com/oembed?url=${encodeURIComponent(scatmanUrl)}&format=json`,
+    title: "Scatman (ski-ba-bop-ba-dop-bop) Official Video HD - Scatman John",
+    author_name: "Scatman John Official YouTube Channel",
+  };
+  const primary = {
+    id: "s0",
+    url: scatmanUrl,
+    title: metadata.title,
+    metadata,
+    content: JSON.stringify(metadata),
+  };
+  const article = {
+    id: "s1",
+    url: "https://example.com/scatman-vocals-and-tempo",
+    title: "Scatman description",
+    content: [
+      '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a song by Scatman John.',
+      "The tempo is up-tempo.",
+      "The vocals are clear and transparent.",
+    ].join(" "),
+  };
+  const tags = [
+    {
+      id: "tag-32",
+      name: "速い",
+      category: "テンポ感",
+      criterion: "速いテンポと説明される。",
+    },
+    {
+      id: "tag-38",
+      name: "透明感",
+      category: "歌声の印象",
+      criterion: "澄んだ透明な歌声の具体的な説明。",
+    },
+  ];
+  const associated = associateOfficialReleaseEvidence(
+    [primary, article],
+    query,
+    { [article.url]: article.content },
+  );
+
+  expect(inferenceTagCandidates(tags, associated, scatmanUrl).map((tag) => tag.id)).toEqual([
+    "tag-32",
+    "tag-38",
+  ]);
+});
+
+it("accepts danceability from a song-specific techno groove and drum-machine description", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const scatmanUrl = "https://www.youtube.com/watch?v=Hy8kmNEo1i8";
+  const query = {
+    title: "Scatman",
+    artist_hint: "Scatman John",
+    reference_url: scatmanUrl,
+  };
+  const quote =
+    'This is driven by the "hellacious" techno groove of its extremely-fast, pitter-pattering chintzy drum machine.';
+  const source = {
+    id: "s0",
+    url: scatmanUrl,
+    title: "Scatman (Ski-Ba-Bop-Ba-Dop-Bop) Official Video HD - Scatman John",
+    content: [
+      '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a novelty synthpop dance song with a quirky Euro-NRG tone by Scatman John.',
+      quote,
+    ].join("\n\n"),
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [
+        {
+          title: "Scatman",
+          reference_url: scatmanUrl,
+          kind: "other",
+          source_id: "s0",
+          quote: "Scatman (Ski-Ba-Bop-Ba-Dop-Bop)",
+          credits: [],
+          tags: [
+            {
+              tag_id: "tag-28",
+              source_id: "s0",
+              quote,
+              reasoning:
+                "The techno groove and pitter-pattering drum machine provide an energetic dance rhythm for the song.",
+            },
+          ],
+        },
+      ],
+    }),
+    [source],
+    query,
+    [
+      {
+        id: "tag-28",
+        name: "ダンサブル",
+        category: "勢い",
+        criterion: "ダンサブルなビートやグルーヴを感じる演奏。",
+      },
+    ],
+  );
+
+  expect(analysis.recordings[0].tags).toMatchObject([
+    { tag_id: "tag-28", source_id: "s0", evidence_type: "semantic_inference" },
+  ]);
+  expect(analysis.review_warnings).toEqual([]);
+});
+
+it("restricts the response tag ID enum to candidates that survive evidence fitting", async () => {
+  const { fitInferenceRequest, knownIdentitySchema } = await import(
+    "../src/research/providers"
+  );
+  const source = {
+    ...primarySource,
+    content:
+      `${primarySource.content}\n\nAn electronic synthpop dance song with an up-tempo beat.`,
+  };
+  const descriptionSource = {
+    id: "s3",
+    url: "https://example.com/mirage-description",
+    title: "蜃気楼 genre description",
+    content: `Selected recording: ${recordingUrl}\n\nAn electronic synthpop dance song with an up-tempo beat.`,
+  };
+  const definitions = [
+    {
+      id: "tag-07",
+      name: "エレクトロ",
+      category: "ジャンル",
+      criterion: "電子音やシンセ主体のサウンド。",
+    },
+    {
+      id: "tag-08",
+      name: "ダンスポップ",
+      category: "ジャンル",
+      criterion: "踊れるビートとポップなメロディの融合。",
+    },
+    {
+      id: "tag-14",
+      name: "切ない",
+      category: "雰囲気",
+      criterion: "悲しさや胸が締めつけられる曲調。",
+    },
+  ];
+  const body: any = {
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "song_evidence",
+        strict: true,
+        schema: knownIdentitySchema([source, descriptionSource], query),
+      },
+    },
+    messages: [
+      { role: "system", content: "Return only supplied tag IDs." },
+      {
+        role: "user",
+        content: JSON.stringify({ query, sources: [source, descriptionSource], tags: definitions }),
+      },
+    ],
+  };
+  const fitted = fitInferenceRequest(body, [source, descriptionSource]);
+  const input = JSON.parse(fitted.body.messages[1].content);
+  const recordingSchema =
+    fitted.body.response_format.json_schema.schema.properties.recordings.items
+      .properties;
+  const tagSchema = recordingSchema.tags;
+
+  expect(input.tags.map((tag: any) => tag.id)).toEqual(["tag-07", "tag-08"]);
+  expect(tagSchema.items.properties.tag_id.enum).toEqual(["tag-07", "tag-08"]);
+  expect(recordingSchema.title.enum).toBeUndefined();
+  expect(recordingSchema.reference_url.enum).toEqual([recordingUrl]);
+  expect(recordingSchema.source_id.enum).toEqual(["s0"]);
+  expect(recordingSchema.quote.enum).toEqual([source.metadata.title]);
+  expect(recordingSchema.credits.items.properties.name.enum).toBeUndefined();
+  expect(recordingSchema.credits.items.properties.quote.enum).toBeUndefined();
+  expect(recordingSchema.credits.items.properties.source_id.enum).toBeUndefined();
+  expect(recordingSchema.tags.items.properties.source_id.enum).toBeUndefined();
+  expect(input.sources.map((item: any) => item.id)).toEqual(["s0", "s3"]);
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [
+        {
+          title: query.title,
+          reference_url: recordingUrl,
+          kind: "original",
+          source_id: "s0",
+          quote: source.metadata.title,
+          credits: [],
+          tags: [],
+        },
+      ],
+    }),
+    [source, descriptionSource],
+    query,
+    definitions,
+  );
+  expect(analysis.recordings[0].reference_url).toBe(recordingUrl);
 });

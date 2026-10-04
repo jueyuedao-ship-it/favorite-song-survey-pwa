@@ -115,14 +115,25 @@ export interface ResearchEvidence {
   content: string;
   metadata?: RecordingMetadata;
   /** Worker-derived for descriptive claims only; never accepted from provider output. */
-  recording_associations?: {
-    provenance: "worker_verified_release_v1";
-    reference_url: string;
-    basis: "official_release";
-    artist: string;
-    title_quote: string;
-    release_url: string;
-  }[];
+  recording_associations?: (
+    | {
+        provenance: "worker_verified_release_v1";
+        reference_url: string;
+        basis: "official_release";
+        artist: string;
+        title_quote: string;
+        release_url: string;
+      }
+    | {
+        provenance: "worker_verified_song_v1";
+        reference_url: string;
+        basis: "exact_song_recording";
+        artist: string;
+        song_title: string;
+        identity_quote: string;
+        description_quote: string;
+      }
+  )[];
 }
 export interface ResearchClaim {
   name: string;

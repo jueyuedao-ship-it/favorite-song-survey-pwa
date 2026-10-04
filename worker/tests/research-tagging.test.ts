@@ -334,49 +334,42 @@ it("keeps supported identity and descriptor tags when optional original and synt
         tags: [
           {
             tag_id: "tag-07",
-      evidence_policy: policyFor("tag-07"),
             source_id: "s2",
             quote: "エレクトロニックなサウンド",
             reasoning: "The description explicitly identifies electronic sound in the recording.",
           },
           {
             tag_id: "tag-13",
-      evidence_policy: policyFor("tag-13"),
             source_id: "s2",
             quote: "軽やかで明るいサウンド",
             reasoning: "The source describes a light and bright mood, directly supporting the bright atmosphere tag.",
           },
           {
             tag_id: "tag-24",
-      evidence_policy: policyFor("tag-24"),
             source_id: "s2",
             quote: "軽やかで明るいサウンド",
             reasoning: "The description of the sound as light directly supports the light energy tag.",
           },
           {
             tag_id: "tag-32",
-      evidence_policy: policyFor("tag-32"),
             source_id: "s2",
             quote: "開放感あふれるアップテンポナンバー",
             reasoning: "The description explicitly calls the number up-tempo.",
           },
           {
             tag_id: "tag-33",
-      evidence_policy: policyFor("tag-33"),
             source_id: "s0",
             quote: `Vocal: ${singer}`,
             reasoning: "The listed vocalist is a human singer and supports the human-vocal tag.",
           },
           {
             tag_id: "tag-38",
-      evidence_policy: policyFor("tag-38"),
             source_id: "s2",
             quote: `透明感に満ちたボーカル・${singer}の歌声`,
             reasoning: "The description explicitly says this vocalist's voice has transparency.",
           },
           {
             tag_id: "tag-47",
-      evidence_policy: policyFor("tag-47"),
             source_id: "s2",
             quote: "希望が同居する世界観",
             reasoning: "The lyric description identifies hope as a theme of the song.",
@@ -1077,7 +1070,6 @@ it("recognizes a source's pop dance tune phrasing for the current dance-pop crit
           tags: [
             {
               tag_id: "tag-08",
-      evidence_policy: policyFor("tag-08"),
               source_id: "s0",
               quote,
               reasoning:
@@ -1092,8 +1084,7 @@ it("recognizes a source's pop dance tune phrasing for the current dance-pop crit
     [tag],
   );
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-08",
-      evidence_policy: policyFor("tag-08"), evidence_type: "semantic_inference" },
+    { tag_id: "tag-08", evidence_type: "semantic_inference" },
   ]);
 });
 
@@ -1125,7 +1116,6 @@ it("accepts the current human-vocal criterion when the source explicitly says �
           tags: [
             {
               tag_id: "tag-33",
-      evidence_policy: policyFor("tag-33"),
               source_id: "s0",
               quote: "人の歌声",
               reasoning:
@@ -1149,8 +1139,7 @@ it("accepts the current human-vocal criterion when the source explicitly says �
   );
 
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-33",
-      evidence_policy: policyFor("tag-33"), evidence_type: "direct" },
+    { tag_id: "tag-33", evidence_type: "direct" },
   ]);
   expect(analysis.review_warnings).toEqual([]);
 });
@@ -1632,7 +1621,6 @@ it("accepts a specific English rationale for Japanese lyric-theme evidence witho
           tags: [
             {
               tag_id: "tag-47",
-      evidence_policy: policyFor("tag-47"),
               source_id: "s0",
               quote: "歌詞では迷いの先にも光を見つける物語を描く。",
               reasoning:
@@ -1656,8 +1644,7 @@ it("accepts a specific English rationale for Japanese lyric-theme evidence witho
   );
 
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-47",
-      evidence_policy: policyFor("tag-47"), evidence_type: "semantic_inference" },
+    { tag_id: "tag-47", evidence_type: "semantic_inference" },
   ]);
   expect(analysis.review_warnings).toEqual([]);
 });
@@ -2264,7 +2251,6 @@ it("accepts danceability from a song-specific techno groove and drum-machine des
           tags: [
             {
               tag_id: "tag-28",
-      evidence_policy: policyFor("tag-28"),
               source_id: "s0",
               quote,
               reasoning:
@@ -2288,8 +2274,7 @@ it("accepts danceability from a song-specific techno groove and drum-machine des
   );
 
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-28",
-      evidence_policy: policyFor("tag-28"), source_id: "s0", evidence_type: "semantic_inference" },
+    { tag_id: "tag-28", source_id: "s0", evidence_type: "semantic_inference" },
   ]);
   expect(analysis.review_warnings).toEqual([]);
 });

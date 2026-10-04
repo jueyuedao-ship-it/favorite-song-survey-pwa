@@ -419,14 +419,14 @@ function exactSongTitleIsSubject(
   const quotedTitle = `[「『"'“‘]?${escapedTitle}[」』"'”’]?`;
   const songNoun = "(?:楽曲|曲|シングル|トラック|作品)";
   const titleFirst = new RegExp(
-    `(?:^|[^\\p{L}\\p{N}])${quotedTitle}\\s*(?:は|が)\\s*[^。！？]{0,100}${songNoun}(?:[。！？]|$)`,
+    `(?:^|[^\\p{L}\\p{N}])${quotedTitle}\\s*(?:は|が)\\s*[^。！？]{0,100}${songNoun}(?:(?:で|だ|です|として|となる|であり|、)|[。！？]|$)`,
     "iu",
   );
   if (titleFirst.test(normalized)) return true;
   if (!artist?.trim()) return false;
   const escapedArtist = escapeRegExp(artist.normalize("NFKC").trim());
   const artistFirst = new RegExp(
-    `(?:^|[^\\p{L}\\p{N}])${escapedArtist}\\s*(?:の|による|が(?:発表|リリース|配信)した)\\s*${quotedTitle}\\s*(?:は|が)?\\s*[^。！？]{0,100}${songNoun}(?:[。！？]|$)`,
+    `(?:^|[^\\p{L}\\p{N}])${escapedArtist}\\s*(?:の|による|が(?:発表|リリース|配信)した)\\s*${quotedTitle}\\s*(?:は|が)?\\s*[^。！？]{0,100}${songNoun}(?:(?:で|だ|です|として|となる|であり|、)|[。！？]|$)`,
     "iu",
   );
   return artistFirst.test(normalized);

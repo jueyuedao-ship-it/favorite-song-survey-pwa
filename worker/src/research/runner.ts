@@ -653,13 +653,6 @@ export async function runResearchQueue(
         "json_extract(data,'$.active')=1",
       );
       const dictionaryVersion = tagDictionaryFingerprint(tags);
-      if (j.dictionary_version !== dictionaryVersion) {
-        await save(env, j, {
-          dictionary_version: dictionaryVersion,
-          descriptive_coverage: completedCoverage,
-        });
-        return;
-      }
       const fitted = fitInferenceRequest(
         {
           model: env.GROQ_MODEL ?? "qwen/qwen3.8-27b",
@@ -721,6 +714,7 @@ export async function runResearchQueue(
           evidence: fitted.evidence,
           analysis: a,
           raw_model: undefined,
+          dictionary_version: dictionaryVersion,
           descriptive_coverage: completedCoverage,
           stage: "catalog",
         });
@@ -784,6 +778,7 @@ export async function runResearchQueue(
       await save(env, j, {
         analysis: a,
         raw_model: rawModel,
+        dictionary_version: dictionaryVersion,
         descriptive_coverage: completedCoverage,
         stage: "catalog",
       });

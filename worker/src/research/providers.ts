@@ -1882,122 +1882,6 @@ export function validateAnalysis(
   return value;
 }
 
-const seedTagCategories = (tagId: string) => {
-  const number = Number(tagId.match(/^tag-(\d+)$/)?.[1]);
-  if (number >= 1 && number <= 12) return "ジャンル";
-  if (number >= 13 && number <= 22) return "雰囲気";
-  if (number >= 23 && number <= 29) return "勢い";
-  if (number >= 30 && number <= 32) return "テンポ感";
-  if (number >= 33 && number <= 37) return "歌声の構成";
-  if (number >= 38 && number <= 42) return "歌声の印象";
-  if (number >= 43 && number <= 50) return "歌詞テーマ";
-  return undefined;
-};
-const seedTagNames = [
-  "",
-  "J-POP",
-  "K-POP",
-  "ロック",
-  "ポップロック",
-  "R&B",
-  "ヒップホップ",
-  "エレクトロ",
-  "ダンスポップ",
-  "ジャズ",
-  "フォーク",
-  "クラシック",
-  "メタル",
-  "明るい",
-  "切ない",
-  "穏やか",
-  "暗い",
-  "幻想的",
-  "懐かしい",
-  "コミカル",
-  "爽やか",
-  "温かい",
-  "緊張感",
-  "しっとり",
-  "軽快",
-  "力強い",
-  "激しい",
-  "疾走感",
-  "ダンサブル",
-  "重厚",
-  "ゆったり",
-  "中程度",
-  "速い",
-  "人の歌声",
-  "合成歌声",
-  "複数ボーカル",
-  "コーラス中心",
-  "インスト",
-  "透明感",
-  "柔らかい",
-  "力強い歌声",
-  "ささやくような",
-  "ハスキー",
-  "恋愛",
-  "別れ",
-  "孤独",
-  "応援",
-  "希望",
-  "日常",
-  "自己探求",
-  "社会・世界",
-];
-const seedTagSignals: Record<string, RegExp> = {
-  "tag-01": /\bj\s*[-–]?\s*pop\b|日本(?:語)?ポップ(?:音楽|ス)?|邦楽ポップ/i,
-  "tag-02": /\bk\s*[-–]?\s*pop\b|韓国ポップ(?:音楽|ス)?/i,
-  "tag-03": /ロック|\brock\b/i,
-  "tag-04": /ポップロック|\bpop\s*[-–]?\s*rock\b|ポップ.{0,16}ロック/i,
-  "tag-05": /\br\s*&\s*b\b|リズム[＆&]ブルース|rhythm and blues/i,
-  "tag-06": /ヒップホップ|\bhip[ -]?hop\b|ラップ.{0,24}(?:ビート|中心)|rap.{0,24}beat/i,
-  "tag-07": /エレクトロ|電子音|\belectronic(?: music)?\b|\bsynthpop\b|シンセ.{0,20}(?:主体|中心|サウンド)|synth(?:sizer)?[- ](?:based|pop|driven)/i,
-  "tag-08": /ダンスポップ|\bdance[ -]?pop\b|\bsynthpop\s+dance\s+(?:song|track|tune)\b|\bpop.{0,16}dance.{0,16}(?:tune|track|song)\b|ポップなダンスチューン|ポップ.{0,16}ダンス.{0,16}(?:ビート|チューン)|踊れるビート.{0,24}ポップ/i,
-  "tag-09": /ジャズ|\bjazz\b|スウィング|\bswing\b|即興演奏|\bimprovisation\b/i,
-  "tag-10": /フォーク|\bfolk(?: music)?\b/i,
-  "tag-11": /クラシック|\bclassical(?: music)?\b|西洋芸術音楽/i,
-  "tag-12": /メタル|\bmetal\b/i,
-  "tag-13": /明る|前向き|\bbright\b|\bcheerful\b|\bpositive mood\b/i,
-  "tag-14": /切な|胸.{0,8}締め|悲し|\bbittersweet\b|\bsad\b|\bmelanchol/i,
-  "tag-15": /穏やか|安ら|落ち着|\bcalm\b|\bpeaceful\b|\bserene\b/i,
-  "tag-16": /暗い|陰鬱|\bdark\b|\bgloomy\b/i,
-  "tag-17": /幻想|夢のよう|非現実的|\bdreamy\b|\bfantastical\b|\bethereal\b/i,
-  "tag-18": /懐か|レトロ|\bnostalgic\b|\bretro\b/i,
-  "tag-19": /コミカル|滑稽|ユーモア|\bcomical\b|\bhumorous\b/i,
-  "tag-20": /爽やか|清涼|すっきり|\brefreshing\b|\bcrisp\b/i,
-  "tag-21": /温か|ぬくもり|親しみ|\bwarm(?:th)?\b|\bwelcoming\b/i,
-  "tag-22": /緊張感|緊迫感|張りつめ|不安.{0,12}(?:曲調|雰囲気)|\btense\b|\bsuspenseful\b/i,
-  "tag-23": /しっとり|静かで落ち着|情緒的な演奏|\bsoftly paced\b|\bsubdued performance\b/i,
-  "tag-24": /軽快|軽やか|弾むリズム|\blively rhythm\b|\bbouncy rhythm\b|\blight and bouncy\b/i,
-  "tag-25": /力強|強いエネルギー|\bpowerful performance\b|\bstrong energy\b/i,
-  "tag-26": /激し|荒々し|\bintense\b|\bfierce\b|\brough sound\b/i,
-  "tag-27": /疾走感|駆け抜け|\brapid and driving\b|\bdriving performance\b/i,
-  "tag-28": /ダンサブル|踊りやすい|反復ビート|\bdanceable\b|\brepetitive beat\b|\bgroove/i,
-  "tag-29": /重厚|厚く重い|\bmassive sound\b|\bheavy arrangement\b/i,
-  "tag-30": /ゆったり|ゆっくりしたテンポ|\bslow tempo\b|\bleisurely tempo\b/i,
-  "tag-31": /中程度.{0,8}テンポ|ミドルテンポ|\bmid(?:dle)?[- ]tempo\b|\bmoderate tempo\b/i,
-  "tag-32": /速いテンポ|アップテンポ|\bfast tempo\b|\bup[- ]tempo\b|\bhigh[- ]tempo\b/i,
-  "tag-33": /人の歌声|人間(?:の)?歌唱|human vocals?/i,
-  "tag-34": /合成音声.{0,16}歌唱|合成歌声|ボーカロイド|vocaloid|synthetic vocals?/i,
-  "tag-35": /複数(?:人|名)?(?:の)?ボーカル|複数(?:人|名)?(?:が)?歌唱|デュエット|duet|multiple vocals?/i,
-  "tag-36": /コーラス.{0,12}(?:中心|主役)|合唱.{0,12}(?:中心|主役)|choir.{0,12}(?:center|focus)|chorus.{0,12}(?:center|focus)/i,
-  "tag-37": /インスト(?:ゥルメンタル)?|instrumental(?: track| song)?|器楽曲/i,
-  "tag-38": /透明感|澄んだ|透き通|\bclear and transparent\b|\btransparent vocals?\b/i,
-  "tag-39": /柔らか|優しい歌声|\bsoft vocals?\b|\bgentle vocals?\b|\btender voice\b/i,
-  "tag-40": /力強い歌声|力のある歌声|\bpowerful vocals?\b|\bstrong singing voice\b/i,
-  "tag-41": /ささや(?:く|き)|\bwhisper(?:ing)? vocals?\b|\bwhispery voice\b/i,
-  "tag-42": /ハスキー|かすれた歌声|\bhusky vocals?\b|\braspy voice\b/i,
-  "tag-43": /歌詞.{0,240}(?:恋愛|愛情|恋心)|(?:恋愛|愛情|恋心).{0,240}歌詞|\blyrics?.{0,240}(?:love|romance|relationship)/i,
-  "tag-44": /歌詞.{0,240}(?:別れ|失恋)|(?:別れ|失恋).{0,240}歌詞|\blyrics?.{0,240}(?:farewell|breakup|parting)/i,
-  "tag-45": /歌詞.{0,240}(?:孤独|ひとり)|(?:孤独|ひとり).{0,240}歌詞|\blyrics?.{0,240}(?:loneliness|alone)/i,
-  "tag-46": /歌詞.{0,240}(?:応援|励ま|背中を押)|(?:応援|励ま).{0,240}歌詞|\blyrics?.{0,240}(?:encourag|support|cheer)/i,
-  "tag-47": /歌詞.{0,240}(?:希望|光を見つけ|未来を信じ)|(?:希望|光を見つけ|未来を信じ).{0,240}歌詞|\blyrics?.{0,240}(?:hope|look toward a better future|new possibilities)|(?:hope|a better future|new possibilities).{0,240}\blyrics?/i,
-  "tag-48": /歌詞.{0,240}(?:日常|毎日)|(?:日常|毎日).{0,240}歌詞|\blyrics?.{0,240}everyday life/i,
-  "tag-49": /歌詞.{0,240}(?:自己探求|自分探し)|(?:自己探求|自分探し).{0,240}歌詞|\blyrics?.{0,240}self[- ]?discovery/i,
-  "tag-50": /歌詞.{0,240}(?:社会|世界(?!観))|(?:社会|世界(?!観)).{0,240}歌詞|\blyrics?.{0,240}(?:society|the world)\b/i,
-};
 type TagDefinition = {
   id: string;
   name: string;
@@ -2010,7 +1894,10 @@ function policySignal(tag: TagDefinition) {
   const patterns = tag.evidence_policy?.positive_patterns?.filter(Boolean);
   if (!patterns?.length) return undefined;
   try {
-    return new RegExp(patterns.map((pattern) => `(?:${pattern})`).join("|"), "iu");
+    return new RegExp(
+      patterns.map((pattern) => `(?:${pattern})`).join("|"),
+      "iu",
+    );
   } catch {
     return undefined;
   }
@@ -2020,7 +1907,10 @@ function policyNegativeSignal(tag: TagDefinition) {
   const patterns = tag.evidence_policy?.negative_patterns?.filter(Boolean);
   if (!patterns?.length) return undefined;
   try {
-    return new RegExp(patterns.map((pattern) => `(?:${pattern})`).join("|"), "iu");
+    return new RegExp(
+      patterns.map((pattern) => `(?:${pattern})`).join("|"),
+      "iu",
+    );
   } catch {
     return undefined;
   }
@@ -2037,35 +1927,6 @@ function policyContextSatisfied(tag: TagDefinition, text: string) {
   });
 }
 
-function trustedSeedProfile(tag: TagDefinition) {
-  const configured = policySignal(tag);
-  if (configured) return configured;
-  const number = Number(tag.id.match(/^tag-(\d+)$/)?.[1]);
-  const criterion = tag.criterion ?? "";
-  const profile = seedTagSignals[tag.id];
-  const generic =
-    criterion ===
-    `Webの説明・公式情報で「${tag.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
-  const peopleSinging =
-    tag.id === "tag-33" &&
-    /人(?:の|または)|人間|human|people/i.test(criterion) &&
-    /歌唱|歌声|ボーカル|vocal|voice/i.test(criterion) &&
-    !/合成|synthetic|vocaloid/i.test(criterion);
-  const dancePop =
-    tag.id === "tag-08" &&
-    /ポップ|pop/i.test(criterion) &&
-    /ダンス|踊れる|dance/i.test(criterion);
-  const denied =
-    /ではなく|ではない|とは言えない|使わない|含まない|該当しない|\bnot\b|\bwithout\b|\brather than\b|\binstead of\b/i.test(
-      criterion,
-    );
-  return seedTagCategories(tag.id) === tag.category &&
-    seedTagNames[number] === tag.name &&
-    !denied &&
-    (profile?.test(criterion) || generic || peopleSinging || dancePop)
-    ? profile
-    : undefined;
-}
 const stopCriterionTerms = new Set(
   "音楽 楽曲 曲 曲調 演奏 説明 記述 明示 特徴 具体 説明される 基準 公式 Web の と が を に は する 主体 中心 特徴 人 または による という 的な 歌声 歌唱 音 説明を 音楽的 音楽性 使う 場合".split(
     /\s+/,
@@ -2229,7 +2090,7 @@ function tagSemanticDecision(
   factualVoice: boolean,
   contextText = quoteText,
 ) {
-  const profile = trustedSeedProfile(tag);
+  const profile = policySignal(tag);
   const policyNegative = policyNegativeSignal(tag);
   const quote = norm(quoteText);
   const nameMatch = norm(tag.name).length > 1 && quote.includes(norm(tag.name));
@@ -2328,7 +2189,7 @@ export function inferenceTagCandidates(
     ),
   );
   return tags.filter((tag) => {
-    const profile = trustedSeedProfile(tag);
+    const profile = policySignal(tag);
     const policyNegative = policyNegativeSignal(tag);
     if (profile) {
       if (tag.id === "tag-33" && vocals && policyContextSatisfied(tag, descriptive))

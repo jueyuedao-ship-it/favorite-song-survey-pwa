@@ -5,7 +5,7 @@ from pathlib import Path
 
 PHASE = "green-integration"
 TEST_COMMAND = "npx vitest run worker/tests/research.test.ts"
-COMMIT_MESSAGE = "test: align research integration flow with seven descriptor groups"
+COMMIT_MESSAGE = "fix: preserve category evidence under semantic candidate budget"
 
 
 def write_env(name: str, value: str) -> None:
@@ -30,6 +30,18 @@ def replace_all(text: str, old: str, new: str, minimum: int = 1) -> str:
     return text.replace(old, new)
 
 
+# Stable seed tags do not need their repeated criterion prose in every model call.
+# The server still validates against the full criterion; compacting the prompt keeps
+# descriptor evidence from being sacrificed to the 7600-token transport budget.
+provider_path = Path("worker/src/research/providers.ts")
+providers = provider_path.read_text(encoding="utf-8")
+providers = replace_once(
+    providers,
+    '''      ...(criterion && criterion !== generic\n        ? { criterion: criterion.length > 72 ? criterion.slice(0, 72) : criterion }\n        : {}),''',
+    '''      ...(criterion && criterion !== generic && !trustedSeedProfile(tag)\n        ? { criterion: criterion.length > 72 ? criterion.slice(0, 72) : criterion }\n        : {}),''',
+)
+provider_path.write_text(providers, encoding="utf-8")
+
 path = Path("worker/tests/research.test.ts")
 tests = path.read_text(encoding="utf-8")
 
@@ -38,10 +50,6 @@ tests = replace_once(
     "async function measuredLiveDrain(f: typeof fetch, n = 25) {",
     "async function measuredLiveDrain(f: typeof fetch, n = 45) {",
 )
-
-old_candidates = '''  expect(observedInput.tags.map((tag: any) => tag.id)).toEqual(\n    expect.arrayContaining([\n      "tag-07",\n      "tag-13",\n      "tag-24",\n      "tag-32",\n      "tag-33",\n      "tag-38",\n      "tag-47",\n    ]),\n  );'''
-new_candidates = '''  expect(observedInput.tags.map((tag: any) => tag.id)).toEqual([\n    "tag-01",\n    "tag-02",\n    "tag-03",\n    "tag-04",\n    "tag-05",\n    "tag-06",\n    "tag-07",\n    "tag-08",\n    "tag-09",\n    "tag-10",\n    "tag-11",\n    "tag-12",\n    "tag-33",\n  ]);'''
-tests = replace_once(tests, old_candidates, new_candidates)
 
 full_old = '''      mood_energy_tempo: "complete" as const,\n      voice: "complete" as const,\n      lyric_theme: "complete" as const,'''
 full_new = '''      mood: "complete" as const,\n      energy: "complete" as const,\n      tempo: "complete" as const,\n      voice_structure: "complete" as const,\n      voice_impression: "complete" as const,\n      lyric_theme: "complete" as const,'''
@@ -92,6 +100,11 @@ tests = replace_all(
 )
 
 tests = replace_once(tests, "  expect(searches).toBe(4);", "  expect(searches).toBe(6);")
+tests = replace_once(
+    tests,
+    '  expect((await allRows(db, "usage"))[0].tavily_credits).toBe(8);',
+    '  expect((await allRows(db, "usage"))[0].tavily_credits).toBe(12);',
+)
 tests = replace_all(
     tests,
     "    expect(searchQueries).toHaveLength(4);",
@@ -103,23 +116,6 @@ tests = replace_all(
     '    expect(searchQueries.some((query) => query.includes("歌声 歌唱"))).toBe(\n      true,\n    );',
     '    expect(searchQueries.some((query) => query.includes("歌唱者 声種"))).toBe(\n      true,\n    );\n    expect(searchQueries.some((query) => query.includes("歌声 声質"))).toBe(\n      true,\n    );',
     minimum=1,
-)
-
-# Category-wide candidates may intentionally omit unrelated descriptor sentences
-# from the fitted request; this fixture only requires the retained genre evidence
-# and explicit vocalist credit to survive the token budget.
-tests = replace_once(
-    tests,
-    '''  expect(fullEvidence.content).toContain("Genre: electronic dance-pop");\n  expect(fullEvidence.content).toContain("A bright and bouncy rhythm");\n  expect(fullEvidence.content).toContain("clear and transparent vocals");\n  expect(fullEvidence.content).toContain("lyrics describe love and hope");''',
-    '''  expect(fullEvidence.content).toContain("Genre: electronic dance-pop");\n  expect(fullEvidence.content).toContain("Vocal: Alice");''',
-)
-
-# Seven independent descriptor groups perform more Tavily lookups than the old
-# four-group pipeline; the expected credit count rises accordingly.
-tests = replace_once(
-    tests,
-    '  expect((await allRows(db, "usage"))[0].tavily_credits).toBe(8);',
-    '  expect((await allRows(db, "usage"))[0].tavily_credits).toBe(12);',
 )
 
 path.write_text(tests, encoding="utf-8")

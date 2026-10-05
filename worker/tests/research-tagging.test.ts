@@ -2916,11 +2916,14 @@ it("locks Scatman semantic recall across candidate fitting and validation", asyn
   );
   const bound = associated[1];
   expect(linkedDescriptionRecording(bound, scatmanUrl)).toBe(true);
-  expect(bound.recording_associations?.[0]).toMatchObject({
+  const songAssociation = bound.recording_associations?.find(
+    (association) => association.provenance === "worker_verified_song_v1",
+  );
+  expect(songAssociation).toMatchObject({
     provenance: "worker_verified_song_v1",
     reference_url: scatmanUrl,
   });
-  expect(bound.recording_associations?.[0].description_quote).not.toContain(
+  expect(songAssociation?.description_quote).not.toContain(
     "Scatman's World",
   );
 

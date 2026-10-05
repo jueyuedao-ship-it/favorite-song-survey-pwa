@@ -2154,56 +2154,63 @@ function tagSemanticDecision(
 ) {
   const profile = trustedSeedProfile(tag);
   const quote = norm(quoteText);
+  const normalizedReasoning = norm(reasoning);
   const nameMatch = norm(tag.name).length > 1 && quote.includes(norm(tag.name));
-  const criterionMatch = criterionTerms(tag.criterion).some((term) =>
-    quote.includes(norm(term)),
+  const criterion = criterionTerms(tag.criterion);
+  const group = descriptorSearchGroups.find(
+    (candidate) => candidate.category === tag.category,
   );
-  const categoryCue =
-    tag.category === "ジャンル"
-      ? descriptorSearchGroups[0].cues.test(contextText)
-      : tag.category === "雰囲気" ||
-          tag.category === "勢い" ||
-          tag.category === "テンポ感"
-        ? descriptorSearchGroups[1].cues.test(contextText)
-        : tag.category === "歌声の構成" || tag.category === "歌声の印象"
-          ? descriptorSearchGroups[2].cues.test(contextText)
-        : tag.category === "歌詞テーマ"
-            ? descriptorSearchGroups[3].cues.test(contextText)
-            : /音作り|音色|音響|楽器|編曲|プロダクション|production|instrumentation/i.test(
-                  `${tag.category ?? ""} ${tag.criterion ?? ""}`,
-              ) &&
-              /sound|music|instrument|electronic|acoustic|synth|音楽|サウンド|音色|音響|楽器|編曲|電子音|シンセ/i.test(
-                contextText,
-              );
-  const needsVoiceNoun = tag.category === "歌声の印象";
-  const voiceNoun =
-    /歌声|歌唱|ボーカル|歌手|\bvocal(?:s)?\b|\bvoice\b|\bsinging\b/i.test(
-      contextText,
-    );
   const customSignal = new RegExp(
-    [tag.name, ...criterionTerms(tag.criterion)]
+    [tag.name, ...criterion]
       .filter(Boolean)
       .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
       .join("|"),
     "i",
   );
-  const moodOrEnergyContext =
+  const categoryCue = group
+    ? group.cues.test(contextText)
+    : /音作り|音色|音響|楽器|編曲|プロダクション|production|instrumentation/i.test(
+          `${tag.category ?? ""} ${tag.criterion ?? ""}`,
+        ) &&
+        /sound|music|instrument|electronic|acoustic|synth|音楽|サウンド|音色|音響|楽器|編曲|電子音|シンセ/i.test(
+          contextText,
+        );
+  const needsVoiceNoun = tag.category === "歌声の印象";
+  const voiceNoun =
+    /歌声|歌唱|ボーカル|歌手|\bvocal(?:s)?\b|\bvoice\b|\bsinging\b/i.test(
+      contextText,
+    );
+  const songPropertyContext =
     tag.category !== "雰囲気" && tag.category !== "勢い"
       ? true
-      : hasSongPropertyContext(contextText, profile ?? customSignal);
-  const matches = factualVoice
-    ? true
-    : profile
-      ? profile.test(contextText) &&
-        !tagEvidenceNegated(contextText, profile) &&
-        (!needsVoiceNoun || voiceNoun) &&
-        moodOrEnergyContext
-      : (nameMatch || criterionMatch) &&
-        categoryCue &&
-        moodOrEnergyContext &&
-        !tagEvidenceNegated(contextText, customSignal);
+      : hasSongPropertyContext(contextText, group?.cues ?? profile ?? customSignal);
+  const profileMatch = Boolean(profile?.test(contextText));
+  const profileDirect =
+    Boolean(profile) &&
+    profileMatch &&
+    !tagEvidenceNegated(contextText, profile!) &&
+    (!needsVoiceNoun || voiceNoun) &&
+    songPropertyContext;
+  const nameSignal = new RegExp(
+    tag.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    "i",
+  );
+  const literalDirect =
+    nameMatch &&
+    categoryCue &&
+    !tagEvidenceNegated(contextText, nameSignal) &&
+    (!needsVoiceNoun || voiceNoun) &&
+    songPropertyContext;
+  const direct = factualVoice || profileDirect || literalDirect;
+  const semanticSignal = group?.cues ?? customSignal;
+  const reasoningAnchor =
+    (norm(tag.name).length > 1 && normalizedReasoning.includes(norm(tag.name))) ||
+    criterion.some(
+      (term) => norm(term).length > 1 && normalizedReasoning.includes(norm(term)),
+    ) ||
+    Boolean(profile?.test(reasoning));
   const hedged =
-    /\b(?:maybe|possibly|perhaps|might|could be|seems?)\b|かもしれ|可能性が|らしい|っぽい|推測/i.test(
+    /\b(?:maybe|possibly|perhaps|might|could be|seems?|uncertain)\b|かもしれ|可能性が|らしい|っぽい|推測/i.test(
       reasoning,
     );
   const explanationCue =
@@ -2214,20 +2221,25 @@ function tagSemanticDecision(
         : tag.category === "勢い"
           ? /energy|rhythm|beat|performance|演奏|勢い|リズム|ビート/i
           : tag.category === "テンポ感"
-            ? /tempo|bpm|pace|テンポ|速度/i
+            ? /tempo|bpm|pace|speed|テンポ|速度/i
             : tag.category === "歌声の構成" || tag.category === "歌声の印象"
               ? /voice|vocal|singing|tone|歌声|歌唱|ボーカル|声質/i
               : tag.category === "歌詞テーマ"
                 ? /lyrics?|lyrical|theme|subject|narrative|words|歌詞|主題|内容|物語/i
-                : /description|evidence|meaning|description|説明|根拠|特徴|内容/i;
+                : /description|evidence|meaning|production|sound|説明|根拠|特徴|内容|音作り|サウンド/i;
   const meaningfulReason =
     reasoning.trim().length >= 24 &&
     /[\p{L}]/u.test(reasoning) &&
     explanationCue.test(reasoning);
-  if (!matches || hedged || !meaningfulReason) return null;
-  return {
-    evidence_type: nameMatch ? ("direct" as const) : ("semantic_inference" as const),
-  };
+  if (hedged || !meaningfulReason) return null;
+  if (direct) return { evidence_type: "direct" as const };
+  const semantic =
+    categoryCue &&
+    reasoningAnchor &&
+    !tagEvidenceNegated(contextText, semanticSignal) &&
+    (!needsVoiceNoun || voiceNoun) &&
+    songPropertyContext;
+  return semantic ? { evidence_type: "semantic_inference" as const } : null;
 }
 
 export function inferenceTagCandidates(

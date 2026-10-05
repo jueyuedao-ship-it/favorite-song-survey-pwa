@@ -1071,7 +1071,7 @@ it("recognizes a source's pop dance tune phrasing for the current dance-pop crit
     [tag],
   );
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-08", evidence_type: "semantic_inference" },
+    { tag_id: "tag-08", evidence_type: "direct" },
   ]);
 });
 
@@ -1293,7 +1293,7 @@ it("supports a custom 音作り category through its current criterion and rejec
         source_id: "s0",
         quote,
         reasoning:
-          "The production description identifies how electronic textures shape the track's arrangement.",
+          "The production description supports the シンセ主導 tag because electronic textures shape the track's arrangement.",
       },
     ],
   });
@@ -1373,7 +1373,7 @@ it("accepts twelve independently supported category decisions and rejects a thir
 
   expect((analysisSchema.properties as any).recordings.items.properties.tags.maxItems).toBe(12);
   expect(analysis.recordings[0].tags).toHaveLength(12);
-  expect(analysis.recordings[0].tags[0].evidence_type).toBe("semantic_inference");
+  expect(analysis.recordings[0].tags[0].evidence_type).toBe("direct");
   expect(analysis.tag_decisions?.filter((decision) => decision.status === "accepted")).toHaveLength(12);
   expect(() =>
     supportedAnalysis(
@@ -1629,7 +1629,7 @@ it("accepts a specific English rationale for Japanese lyric-theme evidence witho
   );
 
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-47", evidence_type: "semantic_inference" },
+    { tag_id: "tag-47", evidence_type: "direct" },
   ]);
   expect(analysis.review_warnings).toEqual([]);
 });
@@ -2258,7 +2258,7 @@ it("accepts danceability from a song-specific techno groove and drum-machine des
   );
 
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-28", source_id: "s0", evidence_type: "semantic_inference" },
+    { tag_id: "tag-28", source_id: "s0", evidence_type: "direct" },
   ]);
   expect(analysis.review_warnings).toEqual([]);
 });

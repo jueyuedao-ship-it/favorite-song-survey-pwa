@@ -926,19 +926,28 @@ it("tracks missing descriptive search groups independently instead of treating o
 
   expect(missingDescriptorCategories(sparse, recordingUrl)).toEqual([
     "genre_sound",
-    "mood_energy_tempo",
-    "voice",
+    "mood",
+    "energy",
+    "tempo",
+    "voice_structure",
+    "voice_impression",
     "lyric_theme",
   ]);
   expect(missingDescriptorCategories(partial, recordingUrl)).toEqual([
-    "mood_energy_tempo",
-    "voice",
+    "mood",
+    "energy",
+    "tempo",
+    "voice_structure",
+    "voice_impression",
     "lyric_theme",
   ]);
-  expect(missingDescriptorCategories(complete, recordingUrl)).toEqual([]);
+  expect(missingDescriptorCategories(complete, recordingUrl)).toEqual([
+    "energy",
+    "voice_structure",
+  ]);
   expect(
-    missingDescriptorCategories(partial, recordingUrl, ["voice"]),
-  ).toEqual(["mood_energy_tempo", "lyric_theme"]);
+    missingDescriptorCategories(partial, recordingUrl, ["voice_structure"]),
+  ).toEqual(["mood", "energy", "tempo", "voice_impression", "lyric_theme"]);
 });
 
 it("packs only tag definitions with matching evidence while retaining custom definitions", async () => {
@@ -978,6 +987,7 @@ it("packs only tag definitions with matching evidence while retaining custom def
   ];
 
   expect(inferenceTagCandidates(tags, [source], recordingUrl).map((tag) => tag.id)).toEqual([
+    "tag-01",
     "tag-07",
     "tag-32",
     "tag-51",
@@ -1061,7 +1071,7 @@ it("recognizes a source's pop dance tune phrasing for the current dance-pop crit
     [tag],
   );
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-08", evidence_type: "semantic_inference" },
+    { tag_id: "tag-08", evidence_type: "direct" },
   ]);
 });
 
@@ -1283,7 +1293,7 @@ it("supports a custom 音作り category through its current criterion and rejec
         source_id: "s0",
         quote,
         reasoning:
-          "The production description identifies how electronic textures shape the track's arrangement.",
+          "The production description supports the シンセ主導 tag because electronic textures shape the track's arrangement.",
       },
     ],
   });
@@ -1363,7 +1373,7 @@ it("accepts twelve independently supported category decisions and rejects a thir
 
   expect((analysisSchema.properties as any).recordings.items.properties.tags.maxItems).toBe(12);
   expect(analysis.recordings[0].tags).toHaveLength(12);
-  expect(analysis.recordings[0].tags[0].evidence_type).toBe("semantic_inference");
+  expect(analysis.recordings[0].tags[0].evidence_type).toBe("direct");
   expect(analysis.tag_decisions?.filter((decision) => decision.status === "accepted")).toHaveLength(12);
   expect(() =>
     supportedAnalysis(
@@ -1571,7 +1581,8 @@ it("fits a real-shaped 50-tag request without losing the associated article or i
       "tag-47",
     ]),
   );
-  expect(input.tags.map((tag: any) => tag.id)).not.toContain("tag-50");
+  expect(input.tags.map((tag: any) => tag.id)).toContain("tag-50");
+  expect(input.tags.map((tag: any) => tag.id)).not.toContain("tag-34");
 });
 
 it("accepts a specific English rationale for Japanese lyric-theme evidence without requiring literal tag repetition", async () => {
@@ -1618,7 +1629,7 @@ it("accepts a specific English rationale for Japanese lyric-theme evidence witho
   );
 
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-47", evidence_type: "semantic_inference" },
+    { tag_id: "tag-47", evidence_type: "direct" },
   ]);
   expect(analysis.review_warnings).toEqual([]);
 });
@@ -1674,7 +1685,7 @@ it("keeps a long Japanese lyric synopsis within the lyric-theme category without
   ).not.toContain("lyric_theme");
   expect(
     missingDescriptorCategories([source], recordingUrl),
-  ).toContain("mood_energy_tempo");
+  ).toContain("mood");
   expect(analysis.recordings[0].tags).toMatchObject([
     { tag_id: "tag-47", evidence_type: "direct" },
   ]);
@@ -1935,7 +1946,7 @@ it("associates only exact song-scoped recording prose without trusting page titl
   expect(fittedArticle.content).not.toContain("Scatman's World");
 });
 
-it("finds only explicit synthpop and synthpop dance song tags in genre evidence", async () => {
+it("exposes every supplied genre tag when genre evidence is supported", async () => {
   const { inferenceTagCandidates } = await import("../src/research/providers");
   const definitions = [
     {
@@ -1952,22 +1963,28 @@ it("finds only explicit synthpop and synthpop dance song tags in genre evidence"
       criterion:
         "Webの説明・公式情報で「ダンスポップ」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。",
     },
+    {
+      id: "tag-03",
+      name: "ロック",
+      category: "ジャンル",
+      criterion: "ギターやドラム主体のロック演奏。",
+    },
   ];
   const explicitDance = {
     id: "s1",
     url: "https://example.com/scatman",
     title: "Scatman composition",
     content:
-      '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a novelty synthpop dance song driven by a techno groove.',
+      '\"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)\" is a novelty synthpop dance song driven by a techno groove.',
   };
   const eurodanceOnly = {
     ...explicitDance,
-    content: '"Scatman" is an Eurodance song.',
+    content: '\"Scatman\" is an Eurodance song.',
   };
 
   expect(
     inferenceTagCandidates(definitions, [explicitDance], "https://example.com/scatman").map((tag) => tag.id),
-  ).toEqual(["tag-07", "tag-08"]);
+  ).toEqual(["tag-07", "tag-08", "tag-03"]);
   expect(
     inferenceTagCandidates(definitions, [eurodanceOnly], "https://example.com/scatman").map((tag) => tag.id),
   ).toEqual([]);
@@ -2125,6 +2142,7 @@ it("does not import genre evidence from another named song later in the same par
   expect(inferenceTagCandidates(tags, revalidated, scatmanUrl).map((tag) => tag.id)).toEqual([
     "tag-07",
     "tag-08",
+    "tag-03",
   ]);
 });
 
@@ -2240,7 +2258,7 @@ it("accepts danceability from a song-specific techno groove and drum-machine des
   );
 
   expect(analysis.recordings[0].tags).toMatchObject([
-    { tag_id: "tag-28", source_id: "s0", evidence_type: "semantic_inference" },
+    { tag_id: "tag-28", source_id: "s0", evidence_type: "direct" },
   ]);
   expect(analysis.review_warnings).toEqual([]);
 });
@@ -2335,4 +2353,705 @@ it("restricts the response tag ID enum to candidates that survive evidence fitti
     definitions,
   );
   expect(analysis.recordings[0].reference_url).toBe(recordingUrl);
+});
+
+it("tracks mood energy and tempo descriptor coverage independently", async () => {
+  const { descriptorSearchGroups, missingDescriptorCategories } = await import(
+    "../src/research/providers"
+  );
+  const groupIds = descriptorSearchGroups.map((group) => group.id);
+  expect(groupIds).toEqual(
+    expect.arrayContaining(["mood", "energy", "tempo"]),
+  );
+
+  const moodSource = {
+    id: "s0",
+    url: recordingUrl,
+    title: "蜃気楼",
+    content: "The song has a cheerful mood.",
+  };
+  const energySource = {
+    id: "s0",
+    url: recordingUrl,
+    title: "蜃気楼",
+    content: "The performance has a driving groove.",
+  };
+  const tempoSource = {
+    id: "s0",
+    url: recordingUrl,
+    title: "蜃気楼",
+    content: "The track is 172 BPM.",
+  };
+
+  const moodMissing = missingDescriptorCategories([moodSource], recordingUrl);
+  expect(moodMissing).not.toContain("mood");
+  expect(moodMissing).toContain("energy");
+  expect(moodMissing).toContain("tempo");
+
+  const energyMissing = missingDescriptorCategories([energySource], recordingUrl);
+  expect(energyMissing).toContain("mood");
+  expect(energyMissing).not.toContain("energy");
+  expect(energyMissing).toContain("tempo");
+
+  const tempoMissing = missingDescriptorCategories([tempoSource], recordingUrl);
+  expect(tempoMissing).toContain("mood");
+  expect(tempoMissing).toContain("energy");
+  expect(tempoMissing).not.toContain("tempo");
+});
+
+it("tracks voice structure and voice impression independently", async () => {
+  const { descriptorSearchGroups, missingDescriptorCategories } = await import(
+    "../src/research/providers"
+  );
+  const groupIds = descriptorSearchGroups.map((group) => group.id);
+  expect(groupIds).toEqual(
+    expect.arrayContaining(["voice_structure", "voice_impression"]),
+  );
+
+  const structureSource = {
+    id: "s0",
+    url: recordingUrl,
+    title: "蜃気楼",
+    content: "The song is a duet with two vocalists.",
+  };
+  const impressionSource = {
+    id: "s0",
+    url: recordingUrl,
+    title: "蜃気楼",
+    content: "The vocals have a husky timbre.",
+  };
+
+  const structureMissing = missingDescriptorCategories(
+    [structureSource],
+    recordingUrl,
+  );
+  expect(structureMissing).not.toContain("voice_structure");
+  expect(structureMissing).toContain("voice_impression");
+
+  const impressionMissing = missingDescriptorCategories(
+    [impressionSource],
+    recordingUrl,
+  );
+  expect(impressionMissing).toContain("voice_structure");
+  expect(impressionMissing).not.toContain("voice_impression");
+});
+
+it("does not open descriptor categories from unrelated recording evidence", async () => {
+  const { descriptorSearchGroups, missingDescriptorCategories } = await import(
+    "../src/research/providers"
+  );
+  const source = {
+    id: "s9",
+    url: "https://example.com/unrelated-recording",
+    title: "Other song",
+    content:
+      "The other song is cheerful, has a driving groove, runs at 172 BPM, and features husky vocals.",
+  };
+
+  expect(missingDescriptorCategories([source], recordingUrl)).toEqual(
+    descriptorSearchGroups.map((group) => group.id),
+  );
+});
+
+it("expands candidates to every active tag in an evidence-supported category", async () => {
+  const { inferenceTagCandidates } = await import("../src/research/providers");
+  const definitions = [
+    { id: "tag-30", name: "ゆったり", category: "テンポ感", criterion: "ゆっくりしたテンポ。" },
+    { id: "tag-31", name: "中程度", category: "テンポ感", criterion: "中程度のテンポ。" },
+    { id: "tag-32", name: "速い", category: "テンポ感", criterion: "速いテンポと説明される。" },
+    { id: "tag-13", name: "明るい", category: "雰囲気", criterion: "明るく前向きな曲調。" },
+  ];
+  const source = {
+    id: "s0",
+    url: recordingUrl,
+    title: "蜃気楼 tempo description",
+    content: "The track is extremely-fast, with pitter-pattering drums.",
+  };
+
+  expect(
+    inferenceTagCandidates(definitions, [source], recordingUrl).map((tag) => tag.id),
+  ).toEqual(["tag-30", "tag-31", "tag-32"]);
+});
+
+it("does not include tags from categories without evidence", async () => {
+  const { inferenceTagCandidates } = await import("../src/research/providers");
+  const definitions = [
+    { id: "tag-32", name: "速い", category: "テンポ感", criterion: "速いテンポと説明される。" },
+    { id: "tag-13", name: "明るい", category: "雰囲気", criterion: "明るく前向きな曲調。" },
+  ];
+  const source = {
+    id: "s0",
+    url: recordingUrl,
+    title: "蜃気楼 tempo description",
+    content: "The track is extremely-fast, with pitter-pattering drums.",
+  };
+
+  expect(
+    inferenceTagCandidates(definitions, [source], recordingUrl).map((tag) => tag.id),
+  ).not.toContain("tag-13");
+});
+
+it("keeps the response tag enum limited to evidence-supported categories", async () => {
+  const { fitInferenceRequest, knownIdentitySchema } = await import(
+    "../src/research/providers"
+  );
+  const definitions = [
+    { id: "tag-30", name: "ゆったり", category: "テンポ感", criterion: "ゆっくりしたテンポ。" },
+    { id: "tag-31", name: "中程度", category: "テンポ感", criterion: "中程度のテンポ。" },
+    { id: "tag-32", name: "速い", category: "テンポ感", criterion: "速いテンポと説明される。" },
+    { id: "tag-13", name: "明るい", category: "雰囲気", criterion: "明るく前向きな曲調。" },
+  ];
+  const source = {
+    id: "s0",
+    url: recordingUrl,
+    title: "蜃気楼 tempo description",
+    content: "蜃気楼 is extremely-fast, with pitter-pattering drums.",
+  };
+  const body: any = {
+    max_completion_tokens: 200,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "song_evidence",
+        strict: true,
+        schema: knownIdentitySchema([source], query),
+      },
+    },
+    messages: [
+      { role: "system", content: "Use supplied evidence only." },
+      {
+        role: "user",
+        content: JSON.stringify({ query, sources: [source], tags: definitions }),
+      },
+    ],
+  };
+
+  const fitted = fitInferenceRequest(body, [source]);
+  const input = JSON.parse(fitted.body.messages[1].content);
+  const tagSchema =
+    fitted.body.response_format.json_schema.schema.properties.recordings.items
+      .properties.tags;
+
+  expect(input.tags.map((tag: any) => tag.id)).toEqual(["tag-30", "tag-31", "tag-32"]);
+  expect(tagSchema.items.properties.tag_id.enum).toEqual(["tag-30", "tag-31", "tag-32"]);
+  expect(tagSchema.maxItems).toBe(12);
+  expect(fitted.evidence[0].content).toContain("extremely-fast");
+});
+
+it("fits expanded category candidates without dropping the supporting Scatman quote", async () => {
+  const { fitInferenceRequest, knownIdentitySchema } = await import(
+    "../src/research/providers"
+  );
+  const scatmanUrl = "https://www.youtube.com/watch?v=Hy8kmNEo1i8";
+  const scatmanQuery = {
+    title: "Scatman",
+    artist_hint: "Scatman John",
+    reference_url: scatmanUrl,
+  };
+  const quote =
+    'This is driven by the "hellacious" techno groove of its extremely-fast, pitter-pattering chintzy drum machine.';
+  const source = {
+    id: "s0",
+    url: scatmanUrl,
+    title: "Scatman",
+    content: `Scatman by Scatman John.\n\n${quote}`,
+  };
+  const definitions = [
+    { id: "tag-24", name: "軽快", category: "勢い", criterion: "軽やかで弾むリズム。" },
+    { id: "tag-28", name: "ダンサブル", category: "勢い", criterion: "ダンサブルなビートやグルーヴを感じる演奏。" },
+    { id: "tag-30", name: "ゆったり", category: "テンポ感", criterion: "ゆっくりしたテンポ。" },
+    { id: "tag-31", name: "中程度", category: "テンポ感", criterion: "中程度のテンポ。" },
+    { id: "tag-32", name: "速い", category: "テンポ感", criterion: "速いテンポと説明される。" },
+  ];
+  const body: any = {
+    max_completion_tokens: 200,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "song_evidence",
+        strict: true,
+        schema: knownIdentitySchema([source], scatmanQuery),
+      },
+    },
+    messages: [
+      { role: "system", content: "Use supplied evidence only." },
+      {
+        role: "user",
+        content: JSON.stringify({ query: scatmanQuery, sources: [source], tags: definitions }),
+      },
+    ],
+  };
+
+  const fitted = fitInferenceRequest(body, [source]);
+  const input = JSON.parse(fitted.body.messages[1].content);
+  expect(input.tags.map((tag: any) => tag.id)).toEqual([
+    "tag-24",
+    "tag-28",
+    "tag-30",
+    "tag-31",
+    "tag-32",
+  ]);
+  expect(fitted.evidence[0].content).toContain(quote);
+});
+
+it("accepts extremely-fast as semantic evidence for 速い", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const quote = "The track runs at an extremely-fast pace with pitter-pattering drums.";
+  const source = { ...primarySource, content: `${primarySource.content}\n\n${quote}` };
+  const tag = {
+    id: "tag-32",
+    name: "速い",
+    category: "テンポ感",
+    criterion: "速いテンポと説明される。",
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "蜃気楼",
+        reference_url: recordingUrl,
+        kind: "original",
+        source_id: "s0",
+        quote: "tayori - 蜃気楼 (Official Video)",
+        credits: [],
+        tags: [{
+          tag_id: tag.id,
+          source_id: "s0",
+          quote,
+          reasoning:
+            "The extremely-fast pace directly entails the selected 速い tempo criterion for this track.",
+        }],
+      }],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+
+  expect(analysis.recordings[0].tags).toMatchObject([
+    { tag_id: "tag-32", evidence_type: "semantic_inference" },
+  ]);
+  expect(analysis.review_warnings).toEqual([]);
+});
+
+it("accepts jaunty rhythmic evidence for 軽快 without a seed-regex match", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const quote = "The song moves with a jaunty, springing rhythm throughout the performance.";
+  const source = { ...primarySource, content: `${primarySource.content}\n\n${quote}` };
+  const tag = {
+    id: "tag-24",
+    name: "軽快",
+    category: "勢い",
+    criterion: "軽やかで弾むリズム。",
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "蜃気楼",
+        reference_url: recordingUrl,
+        kind: "original",
+        source_id: "s0",
+        quote: "tayori - 蜃気楼 (Official Video)",
+        credits: [],
+        tags: [{
+          tag_id: tag.id,
+          source_id: "s0",
+          quote,
+          reasoning:
+            "The jaunty springing rhythm entails the 軽快 tag by describing a light, lively rhythmic performance.",
+        }],
+      }],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+
+  expect(analysis.recordings[0].tags).toMatchObject([
+    { tag_id: "tag-24", evidence_type: "semantic_inference" },
+  ]);
+});
+
+it("marks explicit seed-profile wording as direct evidence", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const quote = "The song has a fast tempo throughout the arrangement.";
+  const source = { ...primarySource, content: `${primarySource.content}\n\n${quote}` };
+  const tag = {
+    id: "tag-32",
+    name: "速い",
+    category: "テンポ感",
+    criterion: "速いテンポと説明される。",
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "蜃気楼",
+        reference_url: recordingUrl,
+        kind: "original",
+        source_id: "s0",
+        quote: "tayori - 蜃気楼 (Official Video)",
+        credits: [],
+        tags: [{
+          tag_id: tag.id,
+          source_id: "s0",
+          quote,
+          reasoning: "The explicit fast tempo wording directly satisfies the selected 速い tempo criterion.",
+        }],
+      }],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+
+  expect(analysis.recordings[0].tags).toMatchObject([
+    { tag_id: "tag-32", evidence_type: "direct" },
+  ]);
+});
+
+it("rejects hedged or unanchored semantic reasoning", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const quote = "The track runs at an extremely-fast pace with pitter-pattering drums.";
+  const source = { ...primarySource, content: `${primarySource.content}\n\n${quote}` };
+  const tag = {
+    id: "tag-32",
+    name: "速い",
+    category: "テンポ感",
+    criterion: "速いテンポと説明される。",
+  };
+  const recording = (reasoning: string) => ({
+    title: "蜃気楼",
+    reference_url: recordingUrl,
+    kind: "original",
+    source_id: "s0",
+    quote: "tayori - 蜃気楼 (Official Video)",
+    credits: [],
+    tags: [{ tag_id: tag.id, source_id: "s0", quote, reasoning }],
+  });
+  const hedged = supportedAnalysis(
+    JSON.stringify({
+      recordings: [recording("The pace maybe indicates the selected 速い tempo tag, but the evidence is uncertain.")],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+  const unanchored = supportedAnalysis(
+    JSON.stringify({
+      recordings: [recording("The exact quote gives a concrete tempo description for the recording and its performance.")],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+
+  expect(hedged.recordings[0].tags).toEqual([]);
+  expect(unanchored.recordings[0].tags).toEqual([]);
+});
+
+it("rejects negated speed evidence", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const quote = "The track is not fast in pace despite the frantic visual editing.";
+  const source = { ...primarySource, content: `${primarySource.content}\n\n${quote}` };
+  const tag = {
+    id: "tag-32",
+    name: "速い",
+    category: "テンポ感",
+    criterion: "速いテンポと説明される。",
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "蜃気楼",
+        reference_url: recordingUrl,
+        kind: "original",
+        source_id: "s0",
+        quote: "tayori - 蜃気楼 (Official Video)",
+        credits: [],
+        tags: [{
+          tag_id: tag.id,
+          source_id: "s0",
+          quote,
+          reasoning: "The sentence discusses speed, but its negated wording cannot establish the 速い tempo tag.",
+        }],
+      }],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+
+  expect(analysis.recordings[0].tags).toEqual([]);
+});
+
+it("does not infer mood from lyric-theme evidence", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const quote = "The lyrics describe a bright future and cheerful hope after hardship.";
+  const source = { ...primarySource, content: `${primarySource.content}\n\n${quote}` };
+  const tag = {
+    id: "tag-13",
+    name: "明るい",
+    category: "雰囲気",
+    criterion: "明るく前向きな曲調。",
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "蜃気楼",
+        reference_url: recordingUrl,
+        kind: "original",
+        source_id: "s0",
+        quote: "tayori - 蜃気楼 (Official Video)",
+        credits: [],
+        tags: [{
+          tag_id: tag.id,
+          source_id: "s0",
+          quote,
+          reasoning: "The bright lyrical idea would otherwise appear related to the 明るい mood tag.",
+        }],
+      }],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+
+  expect(analysis.recordings[0].tags).toEqual([]);
+});
+
+it("does not infer voice impression from a bare vocalist credit", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const tag = {
+    id: "tag-38",
+    name: "透明感",
+    category: "歌声の印象",
+    criterion: "澄んだ透明な歌声の具体的な記述。",
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "蜃気楼",
+        reference_url: recordingUrl,
+        kind: "original",
+        source_id: "s0",
+        quote: "tayori - 蜃気楼 (Official Video)",
+        credits: [{
+          name: "isui",
+          kind: "person",
+          role: "vocalist",
+          source_id: "s0",
+          quote: "Vocal: isui",
+          aliases: [],
+        }],
+        tags: [{
+          tag_id: tag.id,
+          source_id: "s0",
+          quote: "Vocal: isui",
+          reasoning: "The vocalist credit alone should not establish the 透明感 voice-impression tag.",
+        }],
+      }],
+    }),
+    [primarySource],
+    query,
+    [tag],
+  );
+
+  expect(analysis.recordings[0].tags).toEqual([]);
+});
+
+it("locks Scatman semantic recall across candidate fitting and validation", async () => {
+  const {
+    associateOfficialReleaseEvidence,
+    fitInferenceRequest,
+    inferenceTagCandidates,
+    knownIdentitySchema,
+    linkedDescriptionRecording,
+    supportedAnalysis,
+  } = await import("../src/research/providers");
+  const scatmanUrl = "https://www.youtube.com/watch?v=Hy8kmNEo1i8";
+  const scatmanQuery = {
+    title: "Scatman",
+    artist_hint: "Scatman John",
+    reference_url: scatmanUrl,
+  };
+  const metadata = {
+    provider: "youtube_oembed" as const,
+    endpoint: `https://www.youtube.com/oembed?url=${encodeURIComponent(scatmanUrl)}&format=json`,
+    title: "Scatman (ski-ba-bop-ba-dop-bop) Official Video HD - Scatman John",
+    author_name: "Scatman John Official YouTube Channel",
+  };
+  const primary = {
+    id: "s0",
+    url: scatmanUrl,
+    title: metadata.title,
+    metadata,
+    content: JSON.stringify(metadata),
+  };
+  const genreMoodQuote =
+    '"Scatman (Ski-Ba-Bop-Ba-Dop-Bop)" is a novelty synthpop dance song with a quirky Euro-NRG tone.';
+  const voiceLyricsQuote =
+    'As critics summarized, the lyrics contain portions of spoken word, rapping, and a "jaunty ragga" style of scatting, where Scatman John "bends his tongue to rapid, ear-popping effect".';
+  const tempoQuote =
+    'This is driven by the "hellacious" techno groove of its extremely-fast, pitter-pattering chintzy drum machine.';
+  const composition = `${genreMoodQuote} ${voiceLyricsQuote} ${tempoQuote}`;
+  const articleUrl =
+    "https://en.wikipedia.org/wiki/Scatman_(Ski-Ba-Bop-Ba-Dop-Bop)";
+  const rawArticle = [
+    "## Composition",
+    composition,
+    "## Artist biography",
+    "Scatman John released many songs and his artist bio describes an upbeat career.",
+    "## Related tracks",
+    '"Scatman\'s World" is a slow acoustic ballad unrelated to this recording.',
+  ].join("\n\n");
+  const article = {
+    id: "s3",
+    url: articleUrl,
+    title: "Scatman (Ski-Ba-Bop-Ba-Dop-Bop) - Wikipedia",
+    content: rawArticle,
+  };
+  const associated = associateOfficialReleaseEvidence(
+    [primary, article],
+    scatmanQuery,
+    { [articleUrl]: rawArticle },
+  );
+  const bound = associated[1];
+  expect(linkedDescriptionRecording(bound, scatmanUrl)).toBe(true);
+  const songAssociation = bound.recording_associations?.find(
+    (association) => association.provenance === "worker_verified_song_v1",
+  );
+  expect(songAssociation).toMatchObject({
+    provenance: "worker_verified_song_v1",
+    reference_url: scatmanUrl,
+  });
+  expect(songAssociation?.description_quote).not.toContain(
+    "Scatman's World",
+  );
+
+  const definitions = [
+    { id: "tag-07", name: "エレクトロ", category: "ジャンル", criterion: "電子音やシンセ主体のサウンド。" },
+    { id: "tag-08", name: "ダンスポップ", category: "ジャンル", criterion: "踊れるビートとポップなメロディの融合。" },
+    { id: "tag-03", name: "ロック", category: "ジャンル", criterion: "ギターやドラム主体のロック演奏。" },
+    { id: "tag-13", name: "明るい", category: "雰囲気", criterion: "明るく前向きな曲調。" },
+    { id: "tag-19", name: "コミカル", category: "雰囲気", criterion: "コミカルでユーモアのある曲調。" },
+    { id: "tag-24", name: "軽快", category: "勢い", criterion: "軽やかで弾むリズム。" },
+    { id: "tag-27", name: "疾走感", category: "勢い", criterion: "疾走感のある演奏。" },
+    { id: "tag-28", name: "ダンサブル", category: "勢い", criterion: "ダンサブルなビートやグルーヴを感じる演奏。" },
+    { id: "tag-30", name: "ゆったり", category: "テンポ感", criterion: "ゆっくりしたテンポ。" },
+    { id: "tag-31", name: "中程度", category: "テンポ感", criterion: "中程度のテンポ。" },
+    { id: "tag-32", name: "速い", category: "テンポ感", criterion: "速いテンポと説明される。" },
+    { id: "tag-40", name: "力強い歌声", category: "歌声の印象", criterion: "力強さのある歌声。" },
+    { id: "tag-47", name: "希望", category: "歌詞テーマ", criterion: "歌詞が希望を主題とするという解説。" },
+  ];
+  const candidateIds = inferenceTagCandidates(
+    definitions,
+    associated,
+    scatmanUrl,
+  ).map((tag) => tag.id);
+  expect(candidateIds).toEqual([
+    "tag-07",
+    "tag-08",
+    "tag-03",
+    "tag-13",
+    "tag-19",
+    "tag-24",
+    "tag-27",
+    "tag-28",
+    "tag-30",
+    "tag-31",
+    "tag-32",
+  ]);
+  expect(candidateIds).not.toContain("tag-40");
+  expect(candidateIds).not.toContain("tag-47");
+
+  const body: any = {
+    max_completion_tokens: 800,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "scatman_semantic_regression",
+        strict: true,
+        schema: knownIdentitySchema(associated, scatmanQuery),
+      },
+    },
+    messages: [
+      { role: "system", content: "Use supplied evidence only." },
+      {
+        role: "user",
+        content: JSON.stringify({
+          query: scatmanQuery,
+          sources: associated,
+          tags: definitions,
+        }),
+      },
+    ],
+  };
+  const fitted = fitInferenceRequest(body, associated);
+  const input = JSON.parse(fitted.body.messages[1].content);
+  const tagSchema =
+    fitted.body.response_format.json_schema.schema.properties.recordings.items
+      .properties.tags;
+  expect(input.tags.map((tag: any) => tag.id)).toEqual(candidateIds);
+  expect(tagSchema.items.properties.tag_id.enum).toEqual(candidateIds);
+  expect(tagSchema.maxItems).toBe(12);
+  const fittedArticle = fitted.evidence.find((source) => source.id === "s3")!;
+  expect(fittedArticle.content).toContain("novelty synthpop dance song");
+  expect(fittedArticle.content).toContain("techno groove");
+  expect(fittedArticle.content).toContain("extremely-fast");
+  expect(fittedArticle.content).not.toContain("Scatman's World");
+
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "Scatman",
+        reference_url: scatmanUrl,
+        kind: "other",
+        source_id: "s0",
+        quote: metadata.title,
+        credits: [],
+        tags: [
+          {
+            tag_id: "tag-32",
+            source_id: "s3",
+            quote: tempoQuote,
+            reasoning:
+              "The extremely-fast pace explicitly entails the selected 速い tempo criterion for this track.",
+          },
+          {
+            tag_id: "tag-28",
+            source_id: "s3",
+            quote: tempoQuote,
+            reasoning:
+              "The techno groove is direct dance-rhythm evidence for the ダンサブル energy tag.",
+          },
+          {
+            tag_id: "tag-40",
+            source_id: "s3",
+            quote: voiceLyricsQuote,
+            reasoning:
+              "The rapid scatting does not itself establish the 力強い歌声 voice-quality criterion.",
+          },
+          {
+            tag_id: "tag-47",
+            source_id: "s3",
+            quote: voiceLyricsQuote,
+            reasoning:
+              "The passage mentions lyrics but gives no evidence that 希望 is their theme.",
+          },
+        ],
+      }],
+    }),
+    fitted.evidence,
+    scatmanQuery,
+    definitions,
+  );
+  expect(analysis.recordings[0].tags).toMatchObject([
+    { tag_id: "tag-32", evidence_type: "semantic_inference" },
+    { tag_id: "tag-28", evidence_type: "direct" },
+  ]);
+  expect(analysis.recordings[0].tags.map((tag) => tag.tag_id)).not.toContain(
+    "tag-40",
+  );
+  expect(analysis.recordings[0].tags.map((tag) => tag.tag_id)).not.toContain(
+    "tag-47",
+  );
 });

@@ -1182,27 +1182,55 @@ function explicitSyntheticVoiceAttribution(claim: Claim, source: Evidence) {
 export const descriptorSearchGroups = [
   {
     id: "genre_sound",
+    category: "ジャンル",
     label: "ジャンルと音作り",
     search: "ジャンル 音楽性 サウンド 音色 楽器 composition genre sound instrumentation",
     cues:
       /j[- ]?pop|k[- ]?pop|日本語ポップ|韓国ポップ|邦楽ポップ|ロック|rock|r&b|リズム[＆&]ブルース|ヒップホップ|hip.?hop|ラップ|エレクトロ|electronic|電子音|シンセ|synth|ダンスポップ|dance.?pop|\bpop.{0,16}dance.{0,16}(?:tune|track|song)\b|ジャズ|jazz|スウィング|即興|フォーク|folk|クラシック|classical|メタル|metal|オーケストラ|\borchestral\b|\borchestra\b|acoustic|アコースティック/i,
   },
   {
-    id: "mood_energy_tempo",
-    label: "雰囲気・勢い・テンポ",
-    search: "曲調 雰囲気 明るい 切ない 爽やか 勢い テンポ BPM mood energy tempo",
+    id: "mood",
+    category: "雰囲気",
+    label: "雰囲気",
+    search: "曲調 雰囲気 明るい 切ない 爽やか mood tone atmosphere",
     cues:
-      /明る|前向き|切な|胸が締め|悲し|穏やか|安ら|暗い|陰鬱|幻想|夢のよう|懐か|レトロ|コミカル|ユーモア|爽やか|清涼|温か|ぬくもり|緊張感|緊迫|しっとり|軽快|弾む|力強|激し|荒々し|疾走感|駆け抜け|ダンサブル|踊れる|重厚|ゆったり|スローテンポ|ミドルテンポ|アップテンポ|テンポ|\bbpm\b|\bbright\b|\bupbeat\b|\bmelanchol|\bsad\b|\bcalm\b|\bpeaceful\b|\bdark\b|\bdreamy\b|\bnostalgic\b|\brefreshing\b|\bwarm\b|\btense\b|\bgentle\b|\benergetic\b|\bfast tempo\b|\bslow tempo\b|\bmid[- ]tempo\b/i,
+      /曲調|雰囲気|明る|前向き|切な|胸が締め|悲し|穏やか|安ら|暗い|陰鬱|幻想|夢のよう|懐か|レトロ|コミカル|ユーモア|爽やか|清涼|温か|ぬくもり|緊張感|緊迫|\bmood\b|\btone\b|\batmosphere\b|\bbright\b|\bcheerful\b|\bquirky\b|\bcomical\b|\bhumorous\b|\bmelanchol|\bsad\b|\bcalm\b|\bpeaceful\b|\bdark\b|\bdreamy\b|\bnostalgic\b|\brefreshing\b|\bwarm\b|\btense\b/i,
   },
   {
-    id: "voice",
-    label: "歌声の構成と印象",
-    search: "歌声 歌唱 ボーカル 透明感 ハスキー whisper vocal timbre",
+    id: "energy",
+    category: "勢い",
+    label: "勢い",
+    search: "勢い 演奏 リズム ビート グルーヴ energy rhythm beat groove",
     cues:
-      /(歌声|歌唱|ボーカル|歌手|vocal|voice|singing).{0,50}(透明感|澄ん|透き通|柔らか|優し|力強|ささや|ハスキー|かすれ|human|synth|合成|コーラス|合唱|複数|clear|soft|powerful|whisper|husky|chorus|choir|synthetic)|(?:透明感|澄ん|透き通|柔らか|優し|力強|ささや|ハスキー|かすれ|clear|soft|powerful|whisper|husky).{0,50}(歌声|歌唱|ボーカル|歌手|vocal|voice|singing)/i,
+      /勢い|演奏|リズム|ビート|グルー[ヴブ]|しっとり|軽快|軽やか|弾む|力強|激し|荒々し|疾走感|駆け抜け|ダンサブル|踊れる|重厚|\benergy\b|\benergetic\b|\brhythm\b|\bbeat\b|\bgroove\b|\bdriving\b|\bjaunty\b|\brapid\b|\blively\b|\bbouncy\b|\bdanceable\b|\bintense\b|\bfierce\b|\bheavy\b/i,
+  },
+  {
+    id: "tempo",
+    category: "テンポ感",
+    label: "テンポ",
+    search: "テンポ BPM 速度 速い 遅い tempo BPM pace speed",
+    cues:
+      /テンポ|速度|速い|遅い|ゆったり|スローテンポ|ミドルテンポ|アップテンポ|\bbpm\b|\btempo\b|\bpace\b|\bspeed\b|\bfast\b|\bslow\b|\bquick\b|\brapid\b|\bup[- ]tempo\b|\bmid[- ]tempo\b/i,
+  },
+  {
+    id: "voice_structure",
+    category: "歌声の構成",
+    label: "歌声の構成",
+    search: "歌唱者 声種 複数ボーカル コーラス 合唱 インスト duet chorus choir vocal structure",
+    cues:
+      /人の歌声|人間(?:の)?歌唱|合成(?:音声|歌声|ボーカル|歌唱)|ボーカロイド|\bVOCALOID\b|\bSynthesizer\s*V\b|複数(?:人|名)?(?:の)?ボーカル|複数(?:人|名)?(?:が)?歌唱|デュエット|コーラス|合唱|インスト(?:ゥルメンタル)?|器楽曲|\bhuman vocals?\b|\bsynthetic vocals?\b|\bmultiple vocals?\b|\b(?:two|dual)\s+(?:vocalists?|singers?|voices?)\b|\bduet\b|\bchorus\b|\bchoir\b|\binstrumental(?: track| song)?\b/i,
+  },
+  {
+    id: "voice_impression",
+    category: "歌声の印象",
+    label: "歌声の印象",
+    search: "歌声 声質 透明感 ハスキー whisper vocal timbre voice quality",
+    cues:
+      /(歌声|歌唱|ボーカル|歌手|vocal(?:s)?|voice|singing).{0,60}(透明感|澄ん|透き通|柔らか|優し|力強|ささや|ハスキー|かすれ|声質|clear|transparent|soft|gentle|powerful|whisper|husky|raspy|timbre|tone quality)|(?:透明感|澄ん|透き通|柔らか|優し|力強|ささや|ハスキー|かすれ|声質|clear|transparent|soft|gentle|powerful|whisper|husky|raspy|timbre|tone quality).{0,60}(歌声|歌唱|ボーカル|歌手|vocal(?:s)?|voice|singing)/i,
   },
   {
     id: "lyric_theme",
+    category: "歌詞テーマ",
     label: "歌詞テーマ",
     search: "歌詞 内容 テーマ 恋愛 別れ 孤独 希望 lyrics theme meaning",
     cues:
@@ -1414,22 +1442,24 @@ export function fitInferenceRequest(body: any, evidence: Evidence[]) {
     sources.splice(lowValueIndex(), 1);
   const compactCriterion = (tag: (typeof tagDefinitions)[number]) => {
     const generic = `Webの説明・公式情報で「${tag.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
-    return tag.criterion === generic
-      ? {
-          ...tag,
-          criterion: `${tag.name}についてWebで具体的な根拠を確認。曲名や作者名から推測しない。`,
-        }
-      : tag;
+    const criterion = typeof tag.criterion === "string" ? tag.criterion.trim() : "";
+    return {
+      id: tag.id,
+      name: tag.name,
+      category: tag.category,
+      ...(criterion && criterion !== generic && !trustedSeedProfile(tag)
+        ? { criterion: criterion.length > 72 ? criterion.slice(0, 72) : criterion }
+        : {}),
+    };
   };
   const compactGuidance: Record<string, string> = {
-    ジャンル:
-      "明示ジャンルか具体的な音楽特徴。旋律だけでJ-POP、楽器名だけでジャズ/クラシックとしない。",
-    雰囲気: "曲調の説明で判断。歌詞だけで推測しない。",
-    勢い: "演奏やビートの具体描写で判断。",
-    テンポ感: "速度やBPMの明示で判断。",
-    歌声の構成: "声種・人数・コーラス・インストの明示を確認。",
-    歌声の印象: "透明感等は歌声自体の記述で確認。",
-    歌詞テーマ: "歌詞内容の説明で判断。単語だけで推測しない。",
+    ジャンル: "ジャンル/音楽特徴",
+    雰囲気: "曲調",
+    勢い: "演奏/ビート",
+    テンポ感: "速度/BPM",
+    歌声の構成: "声種/人数/構成",
+    歌声の印象: "歌声の声質",
+    歌詞テーマ: "歌詞内容",
   };
   const update = () => {
     const candidates = inferenceTagCandidates(
@@ -1519,6 +1549,14 @@ export function fitInferenceRequest(body: any, evidence: Evidence[]) {
     body.messages[1].content = JSON.stringify(input);
   };
   update();
+  if (
+    requestTokenEstimate(body) > 7600 &&
+    input.tag_category_guidance &&
+    typeof input.tag_category_guidance === "object"
+  ) {
+    delete input.tag_category_guidance;
+    update();
+  }
   while (requestTokenEstimate(body) > 7600) {
     const removable = lowValueIndex();
     if (removable >= 0 && sources.length > 1) {
@@ -2116,56 +2154,63 @@ function tagSemanticDecision(
 ) {
   const profile = trustedSeedProfile(tag);
   const quote = norm(quoteText);
+  const normalizedReasoning = norm(reasoning);
   const nameMatch = norm(tag.name).length > 1 && quote.includes(norm(tag.name));
-  const criterionMatch = criterionTerms(tag.criterion).some((term) =>
-    quote.includes(norm(term)),
+  const criterion = criterionTerms(tag.criterion);
+  const group = descriptorSearchGroups.find(
+    (candidate) => candidate.category === tag.category,
   );
-  const categoryCue =
-    tag.category === "ジャンル"
-      ? descriptorSearchGroups[0].cues.test(contextText)
-      : tag.category === "雰囲気" ||
-          tag.category === "勢い" ||
-          tag.category === "テンポ感"
-        ? descriptorSearchGroups[1].cues.test(contextText)
-        : tag.category === "歌声の構成" || tag.category === "歌声の印象"
-          ? descriptorSearchGroups[2].cues.test(contextText)
-        : tag.category === "歌詞テーマ"
-            ? descriptorSearchGroups[3].cues.test(contextText)
-            : /音作り|音色|音響|楽器|編曲|プロダクション|production|instrumentation/i.test(
-                  `${tag.category ?? ""} ${tag.criterion ?? ""}`,
-              ) &&
-              /sound|music|instrument|electronic|acoustic|synth|音楽|サウンド|音色|音響|楽器|編曲|電子音|シンセ/i.test(
-                contextText,
-              );
-  const needsVoiceNoun = tag.category === "歌声の印象";
-  const voiceNoun =
-    /歌声|歌唱|ボーカル|歌手|\bvocal(?:s)?\b|\bvoice\b|\bsinging\b/i.test(
-      contextText,
-    );
   const customSignal = new RegExp(
-    [tag.name, ...criterionTerms(tag.criterion)]
+    [tag.name, ...criterion]
       .filter(Boolean)
       .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
       .join("|"),
     "i",
   );
-  const moodOrEnergyContext =
+  const categoryCue = group
+    ? group.cues.test(contextText)
+    : /音作り|音色|音響|楽器|編曲|プロダクション|production|instrumentation/i.test(
+          `${tag.category ?? ""} ${tag.criterion ?? ""}`,
+        ) &&
+        /sound|music|instrument|electronic|acoustic|synth|音楽|サウンド|音色|音響|楽器|編曲|電子音|シンセ/i.test(
+          contextText,
+        );
+  const needsVoiceNoun = tag.category === "歌声の印象";
+  const voiceNoun =
+    /歌声|歌唱|ボーカル|歌手|\bvocal(?:s)?\b|\bvoice\b|\bsinging\b/i.test(
+      contextText,
+    );
+  const songPropertyContext =
     tag.category !== "雰囲気" && tag.category !== "勢い"
       ? true
-      : hasSongPropertyContext(contextText, profile ?? customSignal);
-  const matches = factualVoice
-    ? true
-    : profile
-      ? profile.test(contextText) &&
-        !tagEvidenceNegated(contextText, profile) &&
-        (!needsVoiceNoun || voiceNoun) &&
-        moodOrEnergyContext
-      : (nameMatch || criterionMatch) &&
-        categoryCue &&
-        moodOrEnergyContext &&
-        !tagEvidenceNegated(contextText, customSignal);
+      : hasSongPropertyContext(contextText, group?.cues ?? profile ?? customSignal);
+  const profileMatch = Boolean(profile?.test(contextText));
+  const profileDirect =
+    Boolean(profile) &&
+    profileMatch &&
+    !tagEvidenceNegated(contextText, profile!) &&
+    (!needsVoiceNoun || voiceNoun) &&
+    songPropertyContext;
+  const nameSignal = new RegExp(
+    tag.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    "i",
+  );
+  const literalDirect =
+    nameMatch &&
+    categoryCue &&
+    !tagEvidenceNegated(contextText, nameSignal) &&
+    (!needsVoiceNoun || voiceNoun) &&
+    songPropertyContext;
+  const direct = factualVoice || profileDirect || literalDirect;
+  const semanticSignal = group?.cues ?? customSignal;
+  const reasoningAnchor =
+    (norm(tag.name).length > 1 && normalizedReasoning.includes(norm(tag.name))) ||
+    criterion.some(
+      (term) => norm(term).length > 1 && normalizedReasoning.includes(norm(term)),
+    ) ||
+    Boolean(profile?.test(reasoning));
   const hedged =
-    /\b(?:maybe|possibly|perhaps|might|could be|seems?)\b|かもしれ|可能性が|らしい|っぽい|推測/i.test(
+    /\b(?:maybe|possibly|perhaps|might|could be|seems?|uncertain)\b|かもしれ|可能性が|らしい|っぽい|推測/i.test(
       reasoning,
     );
   const explanationCue =
@@ -2176,20 +2221,25 @@ function tagSemanticDecision(
         : tag.category === "勢い"
           ? /energy|rhythm|beat|performance|演奏|勢い|リズム|ビート/i
           : tag.category === "テンポ感"
-            ? /tempo|bpm|pace|テンポ|速度/i
+            ? /tempo|bpm|pace|speed|テンポ|速度/i
             : tag.category === "歌声の構成" || tag.category === "歌声の印象"
               ? /voice|vocal|singing|tone|歌声|歌唱|ボーカル|声質/i
               : tag.category === "歌詞テーマ"
                 ? /lyrics?|lyrical|theme|subject|narrative|words|歌詞|主題|内容|物語/i
-                : /description|evidence|meaning|description|説明|根拠|特徴|内容/i;
+                : /description|evidence|meaning|production|sound|説明|根拠|特徴|内容|音作り|サウンド/i;
   const meaningfulReason =
     reasoning.trim().length >= 24 &&
     /[\p{L}]/u.test(reasoning) &&
     explanationCue.test(reasoning);
-  if (!matches || hedged || !meaningfulReason) return null;
-  return {
-    evidence_type: nameMatch ? ("direct" as const) : ("semantic_inference" as const),
-  };
+  if (hedged || !meaningfulReason) return null;
+  if (direct) return { evidence_type: "direct" as const };
+  const semantic =
+    categoryCue &&
+    reasoningAnchor &&
+    !tagEvidenceNegated(contextText, semanticSignal) &&
+    (!needsVoiceNoun || voiceNoun) &&
+    songPropertyContext;
+  return semantic ? { evidence_type: "semantic_inference" as const } : null;
 }
 
 export function inferenceTagCandidates(
@@ -2200,21 +2250,30 @@ export function inferenceTagCandidates(
   const usable = evidence.filter(
     (source) => !recording || linkedDescriptionRecording(source, recording),
   );
-  const prose = usable.map((source) => independentText(source)).join("\n");
   const descriptive = usable.map(descriptiveLines).join("\n");
-  const vocals = usable.some((source) =>
-    independentText(source).split(/\r?\n/).some((line) =>
-      creditClauses(line).some((claim) => claim.role === "vocalist"),
-    ),
+  const supportedCategories = new Set(
+    descriptorSearchGroups
+      .filter((group) =>
+        usable.some((source) => group.cues.test(descriptiveLines(source).join("\n"))),
+      )
+      .map((group) => group.category),
   );
+  const vocals = usable.some((source) =>
+    independentText(source)
+      .split(/\r?\n/)
+      .some((line) =>
+        creditClauses(line).some((claim) => claim.role === "vocalist"),
+      ),
+  );
+  const normalizedText = norm(descriptive);
   return tags.filter((tag) => {
-    const profile = trustedSeedProfile(tag);
-    const isUnchangedSeed = Boolean(profile);
-    if (isUnchangedSeed && profile) {
+    const group = descriptorSearchGroups.find(
+      (candidate) => candidate.category === tag.category,
+    );
+    if (group) {
       if (tag.id === "tag-33" && vocals) return true;
-      return profile.test(descriptive) && !tagEvidenceNegated(descriptive, profile);
+      return supportedCategories.has(group.category);
     }
-    const normalizedText = norm(descriptive);
     return [tag.name, ...criterionTerms(tag.criterion)].some(
       (term) => norm(term).length > 1 && normalizedText.includes(norm(term)),
     );

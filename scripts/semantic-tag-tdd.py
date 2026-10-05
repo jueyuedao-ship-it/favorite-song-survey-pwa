@@ -76,16 +76,27 @@ compact_replacement = r'''  const compactCriterion = (tag: (typeof tagDefinition
       id: tag.id,
       name: tag.name,
       category: tag.category,
-      criterion:
-        criterion === generic
-          ? "Web根拠必須"
-          : criterion.length > 96
-            ? criterion.slice(0, 96)
-            : criterion,
+      ...(criterion && criterion !== generic
+        ? { criterion: criterion.length > 72 ? criterion.slice(0, 72) : criterion }
+        : {}),
     };
   };
 '''
 text = text[:compact_start] + compact_replacement + text[compact_end:]
+
+guidance_start = text.index("  const compactGuidance: Record<string, string> = {")
+guidance_end = text.index("  const update = () => {", guidance_start)
+guidance_replacement = r'''  const compactGuidance: Record<string, string> = {
+    ジャンル: "明示ジャンル/音楽特徴。楽器名だけで推測しない。",
+    雰囲気: "歌詞でなく曲調。",
+    勢い: "演奏/ビートの描写。",
+    テンポ感: "速度/BPM。",
+    歌声の構成: "声種/人数/コーラス/インスト。",
+    歌声の印象: "歌声自体の声質描写。",
+    歌詞テーマ: "歌詞内容の説明。",
+  };
+'''
+text = text[:guidance_start] + guidance_replacement + text[guidance_end:]
 providers_path.write_text(text, encoding="utf-8")
 
 test_path = Path("worker/tests/research-tagging.test.ts")

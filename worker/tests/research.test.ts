@@ -409,7 +409,7 @@ it("restarts a failed shared version job with the current analysis version and n
     stage: "done" as const,
     analysis_version: "1",
     dictionary_version: "old-dictionary",
-    descriptive_category: "voice",
+    descriptive_category: "voice_structure",
     descriptive_status: "unavailable" as const,
     descriptive_source_ids: ["s1"],
     descriptive_coverage: { genre_sound: "complete" as const, voice: "unavailable" as const },
@@ -1742,7 +1742,7 @@ function liveFixture(
     return provider(i, init);
   }) as typeof fetch;
 }
-async function measuredLiveDrain(f: typeof fetch, n = 25) {
+async function measuredLiveDrain(f: typeof fetch, n = 45) {
   for (let i = 0; i < n; i++) {
     let queries = 0;
     const measured = new Proxy(db, {
@@ -3037,12 +3037,12 @@ it("investigates missing descriptors with a bounded Japanese metadata query and 
     return fixture(i, init);
   }) as typeof fetch;
   await measuredLiveDrain(f, 38);
-  expect(searches).toBe(4);
+  expect(searches).toBe(6);
   expect(lookupBodies[1].query).toContain(song.author);
   expect(lookupBodies[1].query).not.toContain("youtube.com");
   expect(lookupBodies[1].query.length).toBeLessThanOrEqual(399);
   expect((await allRows(db, "tag_assignments"))[0]?.tag_id).toBe("tag-08");
-  expect((await allRows(db, "usage"))[0].tavily_credits).toBe(8);
+  expect((await allRows(db, "usage"))[0].tavily_credits).toBe(12);
 });
 
 it.each(["quota", "provider"])(
@@ -3341,14 +3341,17 @@ it.each([0, 1])(
       return provider(i, init);
     }) as typeof fetch;
     await measuredLiveDrain(f, 38);
-    expect(searchQueries).toHaveLength(4);
+    expect(searchQueries).toHaveLength(7);
     expect(searchQueries.some((query) => query.includes("ジャンル 音楽性"))).toBe(
       true,
     );
     expect(searchQueries.some((query) => query.includes("曲調 雰囲気"))).toBe(
       true,
     );
-    expect(searchQueries.some((query) => query.includes("歌声 歌唱"))).toBe(
+    expect(searchQueries.some((query) => query.includes("歌唱者 声種"))).toBe(
+      true,
+    );
+    expect(searchQueries.some((query) => query.includes("歌声 声質"))).toBe(
       true,
     );
     expect(searchQueries.some((query) => query.includes("歌詞 内容"))).toBe(
@@ -3562,7 +3565,7 @@ it("re-extracts a duplicate source for its selected descriptor category and reta
     purpose: "tag_enrichment" as const,
     query: { title: "Blue Song", artist_hint: null, reference_url: url },
     stage: "describe_search" as const,
-    descriptive_category: "mood_energy_tempo",
+    descriptive_category: "mood",
     descriptive_coverage: { genre_sound: "complete" as const },
     evidence: [
       {
@@ -3653,7 +3656,7 @@ it("re-extracts a duplicate source for its selected descriptor category and reta
   await run(env(), undefined, f);
   let job = (await allRows(db, "research_jobs"))[0];
   expect(job.stage).toBe("describe_extract");
-  expect(job.descriptive_category).toBe("mood_energy_tempo");
+  expect(job.descriptive_category).toBe("mood");
   expect(job.descriptive_source_ids).toEqual(["s0"]);
   expect(job.evidence?.map((source) => source.id)).toEqual(["s0"]);
   expect(job.evidence?.[0].recording_associations).toBeUndefined();
@@ -3681,7 +3684,7 @@ it("re-extracts a duplicate source for its selected descriptor category and reta
   expect(job.evidence?.[0].metadata?.title).toBe("Blue Song");
   expect(job.descriptive_coverage).toMatchObject({
     genre_sound: "complete",
-    mood_energy_tempo: "complete",
+    mood: "complete",
   });
   expect(metadataLookups).toBe(0);
   expect((await allRows(db, "usage"))[0].tavily_credits).toBe(2);
@@ -3846,22 +3849,22 @@ it("marks an empty group once and searches the next missing category independent
   await run(env(), undefined, f);
   let job = (await allRows(db, "research_jobs"))[0];
   expect(job.stage).toBe("describe_search");
-  expect(job.descriptive_category).toBe("mood_energy_tempo");
+  expect(job.descriptive_category).toBe("mood");
 
   await run(env(), undefined, f);
   job = (await allRows(db, "research_jobs"))[0];
   expect(job.stage).toBe("infer");
   expect(job.descriptive_coverage).toMatchObject({
     genre_sound: "complete",
-    mood_energy_tempo: "complete",
+    mood: "complete",
   });
 
   await run(env(), undefined, f);
   job = (await allRows(db, "research_jobs"))[0];
   expect(job.stage).toBe("describe_search");
-  expect(job.descriptive_category).toBe("voice");
+  expect(job.descriptive_category).toBe("energy");
   expect(queries).toHaveLength(1);
-  expect(queries[0]).toContain("BPM");
+  expect(queries[0]).toContain("曲調");
 });
 
 it("retries a 429 in the same descriptor group before marking it complete", async () => {
@@ -3882,7 +3885,7 @@ it("retries a 429 in the same descriptor group before marking it complete", asyn
     purpose: "tag_enrichment" as const,
     query: { title: "Blue Song", artist_hint: null, reference_url: url },
     stage: "describe_search" as const,
-    descriptive_category: "mood_energy_tempo",
+    descriptive_category: "mood",
     descriptive_coverage: { genre_sound: "complete" as const },
     evidence: [{ id: "s0", url, title: "Blue Song", content: "Blue Song." }],
   };
@@ -3914,7 +3917,7 @@ it("retries a 429 in the same descriptor group before marking it complete", asyn
   expect(job).toMatchObject({
     status: "queued",
     stage: "describe_search",
-    descriptive_category: "mood_energy_tempo",
+    descriptive_category: "mood",
     attempts: 1,
   });
   expect(job.descriptive_coverage).toEqual({ genre_sound: "complete" });
@@ -3925,7 +3928,7 @@ it("retries a 429 in the same descriptor group before marking it complete", asyn
   expect(job.stage).toBe("infer");
   expect(job.descriptive_coverage).toEqual({
     genre_sound: "complete",
-    mood_energy_tempo: "complete",
+    mood: "complete",
   });
   expect(searchQueries).toHaveLength(2);
   expect(searchQueries[1]).toBe(searchQueries[0]);
@@ -3953,7 +3956,7 @@ it("keeps the global 429 retry window after a descriptor group becomes unavailab
     purpose: "tag_enrichment" as const,
     query: { title: "Blue Song", artist_hint: null, reference_url: url },
     stage: "describe_search" as const,
-    descriptive_category: "mood_energy_tempo",
+    descriptive_category: "mood",
     descriptive_coverage: { genre_sound: "complete" as const },
     attempts: 3,
     next_attempt_at: "2000-01-01T00:00:00Z",
@@ -3991,7 +3994,7 @@ it("keeps the global 429 retry window after a descriptor group becomes unavailab
     descriptive_status: "unavailable",
     descriptive_coverage: {
       genre_sound: "complete",
-      mood_energy_tempo: "unavailable",
+      mood: "unavailable",
     },
     last_error: "PROVIDER_HTTP_429",
   });
@@ -4002,7 +4005,7 @@ it("keeps the global 429 retry window after a descriptor group becomes unavailab
   await run(env(), undefined, f);
   job = (await allRows(db, "research_jobs"))[0];
   expect(job.stage).toBe("describe_search");
-  expect(job.descriptive_category).toBe("voice");
+  expect(job.descriptive_category).toBe("energy");
   expect(searches).toBe(1);
 });
 
@@ -4024,7 +4027,7 @@ it("marks a terminal descriptor failure unavailable and continues with another g
     purpose: "tag_enrichment" as const,
     query: { title: "Blue Song", artist_hint: null, reference_url: url },
     stage: "describe_search" as const,
-    descriptive_category: "mood_energy_tempo",
+    descriptive_category: "mood",
     descriptive_coverage: { genre_sound: "complete" as const },
     evidence: [{ id: "s0", url, title: "Blue Song", content: "Blue Song." }],
   };
@@ -4051,13 +4054,13 @@ it("marks a terminal descriptor failure unavailable and continues with another g
   expect(job.stage).toBe("infer");
   expect(job.descriptive_coverage).toMatchObject({
     genre_sound: "complete",
-    mood_energy_tempo: "unavailable",
+    mood: "unavailable",
   });
 
   await run(env(), undefined, f);
   job = (await allRows(db, "research_jobs"))[0];
   expect(job.stage).toBe("describe_search");
-  expect(job.descriptive_category).toBe("voice");
+  expect(job.descriptive_category).toBe("energy");
 });
 
 it("fits all active tag definitions while retaining evidence for more than five researched tags", async () => {
@@ -4088,8 +4091,11 @@ it("fits all active tag definitions while retaining evidence for more than five 
     stage: "infer" as const,
     descriptive_coverage: {
       genre_sound: "complete" as const,
-      mood_energy_tempo: "complete" as const,
-      voice: "complete" as const,
+      mood: "complete" as const,
+      energy: "complete" as const,
+      tempo: "complete" as const,
+      voice_structure: "complete" as const,
+      voice_impression: "complete" as const,
       lyric_theme: "complete" as const,
     },
     evidence: [
@@ -4249,8 +4255,11 @@ it("publishes a release-article tag through worker association without accepting
     descriptive_source_ids: ["s1"],
     descriptive_coverage: {
       genre_sound: "complete" as const,
-      mood_energy_tempo: "complete" as const,
-      voice: "complete" as const,
+      mood: "complete" as const,
+      energy: "complete" as const,
+      tempo: "complete" as const,
+      voice_structure: "complete" as const,
+      voice_impression: "complete" as const,
       lyric_theme: "complete" as const,
     },
     evidence: [
@@ -4404,8 +4413,11 @@ it("marks a legacy inference job with the current analysis version and skips an 
     stage: "infer" as const,
     descriptive_coverage: {
       genre_sound: "complete" as const,
-      mood_energy_tempo: "complete" as const,
-      voice: "complete" as const,
+      mood: "complete" as const,
+      energy: "complete" as const,
+      tempo: "complete" as const,
+      voice_structure: "complete" as const,
+      voice_impression: "complete" as const,
       lyric_theme: "complete" as const,
     },
     evidence: [
@@ -4506,8 +4518,11 @@ it("keeps a selected native recording as an uploader candidate when no tag defin
     stage: "infer" as const,
     descriptive_coverage: {
       genre_sound: "complete" as const,
-      mood_energy_tempo: "complete" as const,
-      voice: "complete" as const,
+      mood: "complete" as const,
+      energy: "complete" as const,
+      tempo: "complete" as const,
+      voice_structure: "complete" as const,
+      voice_impression: "complete" as const,
       lyric_theme: "complete" as const,
     },
     evidence: [
@@ -4639,7 +4654,7 @@ it("preserves verified song-scoped evidence while another source is category-ext
     analysis_version: "2",
     query,
     stage: "describe_extract" as const,
-    descriptive_category: "voice",
+    descriptive_category: "voice_structure",
     descriptive_source_ids: [target.id],
     evidence: [primary, target, partialArticle],
   };
@@ -4703,8 +4718,11 @@ it("still runs candidate lookup inference when no tag definitions fit", async ()
     lease_until: null,
     descriptive_coverage: {
       genre_sound: "complete" as const,
-      mood_energy_tempo: "complete" as const,
-      voice: "complete" as const,
+      mood: "complete" as const,
+      energy: "complete" as const,
+      tempo: "complete" as const,
+      voice_structure: "complete" as const,
+      voice_impression: "complete" as const,
       lyric_theme: "complete" as const,
     },
     evidence: [

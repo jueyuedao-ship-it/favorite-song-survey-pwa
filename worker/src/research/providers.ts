@@ -1447,7 +1447,7 @@ export function fitInferenceRequest(body: any, evidence: Evidence[]) {
       id: tag.id,
       name: tag.name,
       category: tag.category,
-      ...(criterion && criterion !== generic
+      ...(criterion && criterion !== generic && !trustedSeedProfile(tag)
         ? { criterion: criterion.length > 72 ? criterion.slice(0, 72) : criterion }
         : {}),
     };

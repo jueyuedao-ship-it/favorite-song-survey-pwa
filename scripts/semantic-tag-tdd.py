@@ -155,6 +155,11 @@ tests = replace_once(
     '{ tag_id: "tag-28", source_id: "s0", evidence_type: "semantic_inference" },',
     '{ tag_id: "tag-28", source_id: "s0", evidence_type: "direct" },',
 )
+tests = replace_once(
+    tests,
+    '"The production description identifies how electronic textures shape the track\'s arrangement.",',
+    '"The production description supports the シンセ主導 tag because electronic textures shape the track\'s arrangement.",',
+)
 test_path.write_text(tests, encoding="utf-8")
 
 write_env("SEMANTIC_PHASE", PHASE)

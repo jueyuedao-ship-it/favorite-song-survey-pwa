@@ -15,6 +15,12 @@ def write_env(name: str, value: str) -> None:
             handle.write(f"{name}={value}\n")
 
 
+def replace_once(text: str, old: str, new: str) -> str:
+    if text.count(old) != 1:
+        raise RuntimeError(f"expected one replacement target, found {text.count(old)}")
+    return text.replace(old, new, 1)
+
+
 providers_path = Path("worker/src/research/providers.ts")
 text = providers_path.read_text(encoding="utf-8")
 start_marker = "export const descriptorSearchGroups = ["
@@ -80,6 +86,20 @@ replacement = r'''export const descriptorSearchGroups = [
   },
 ] as const;'''
 providers_path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+
+test_path = Path("worker/tests/research-tagging.test.ts")
+tests = test_path.read_text(encoding="utf-8")
+tests = replace_once(
+    tests,
+    '''  expect(missingDescriptorCategories(sparse, recordingUrl)).toEqual([\n    "genre_sound",\n    "mood_energy_tempo",\n    "voice",\n    "lyric_theme",\n  ]);\n  expect(missingDescriptorCategories(partial, recordingUrl)).toEqual([\n    "mood_energy_tempo",\n    "voice",\n    "lyric_theme",\n  ]);\n  expect(missingDescriptorCategories(complete, recordingUrl)).toEqual([]);\n  expect(\n    missingDescriptorCategories(partial, recordingUrl, ["voice"]),\n  ).toEqual(["mood_energy_tempo", "lyric_theme"]);''',
+    '''  expect(missingDescriptorCategories(sparse, recordingUrl)).toEqual([\n    "genre_sound",\n    "mood",\n    "energy",\n    "tempo",\n    "voice_structure",\n    "voice_impression",\n    "lyric_theme",\n  ]);\n  expect(missingDescriptorCategories(partial, recordingUrl)).toEqual([\n    "mood",\n    "energy",\n    "tempo",\n    "voice_structure",\n    "voice_impression",\n    "lyric_theme",\n  ]);\n  expect(missingDescriptorCategories(complete, recordingUrl)).toEqual([\n    "energy",\n    "voice_structure",\n  ]);\n  expect(\n    missingDescriptorCategories(partial, recordingUrl, ["voice_structure"]),\n  ).toEqual(["mood", "energy", "tempo", "voice_impression", "lyric_theme"]);''',
+)
+tests = replace_once(
+    tests,
+    ''').toContain("mood_energy_tempo");''',
+    ''').toContain("mood");''',
+)
+test_path.write_text(tests, encoding="utf-8")
 
 write_env("SEMANTIC_PHASE", PHASE)
 write_env("SEMANTIC_TEST_COMMAND", TEST_COMMAND)

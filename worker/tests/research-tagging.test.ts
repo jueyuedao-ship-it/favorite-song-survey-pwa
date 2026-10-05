@@ -926,19 +926,28 @@ it("tracks missing descriptive search groups independently instead of treating o
 
   expect(missingDescriptorCategories(sparse, recordingUrl)).toEqual([
     "genre_sound",
-    "mood_energy_tempo",
-    "voice",
+    "mood",
+    "energy",
+    "tempo",
+    "voice_structure",
+    "voice_impression",
     "lyric_theme",
   ]);
   expect(missingDescriptorCategories(partial, recordingUrl)).toEqual([
-    "mood_energy_tempo",
-    "voice",
+    "mood",
+    "energy",
+    "tempo",
+    "voice_structure",
+    "voice_impression",
     "lyric_theme",
   ]);
-  expect(missingDescriptorCategories(complete, recordingUrl)).toEqual([]);
+  expect(missingDescriptorCategories(complete, recordingUrl)).toEqual([
+    "energy",
+    "voice_structure",
+  ]);
   expect(
-    missingDescriptorCategories(partial, recordingUrl, ["voice"]),
-  ).toEqual(["mood_energy_tempo", "lyric_theme"]);
+    missingDescriptorCategories(partial, recordingUrl, ["voice_structure"]),
+  ).toEqual(["mood", "energy", "tempo", "voice_impression", "lyric_theme"]);
 });
 
 it("packs only tag definitions with matching evidence while retaining custom definitions", async () => {
@@ -1674,7 +1683,7 @@ it("keeps a long Japanese lyric synopsis within the lyric-theme category without
   ).not.toContain("lyric_theme");
   expect(
     missingDescriptorCategories([source], recordingUrl),
-  ).toContain("mood_energy_tempo");
+  ).toContain("mood");
   expect(analysis.recordings[0].tags).toMatchObject([
     { tag_id: "tag-47", evidence_type: "direct" },
   ]);

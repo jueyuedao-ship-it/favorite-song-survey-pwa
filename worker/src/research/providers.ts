@@ -1182,27 +1182,55 @@ function explicitSyntheticVoiceAttribution(claim: Claim, source: Evidence) {
 export const descriptorSearchGroups = [
   {
     id: "genre_sound",
+    category: "ジャンル",
     label: "ジャンルと音作り",
     search: "ジャンル 音楽性 サウンド 音色 楽器 composition genre sound instrumentation",
     cues:
       /j[- ]?pop|k[- ]?pop|日本語ポップ|韓国ポップ|邦楽ポップ|ロック|rock|r&b|リズム[＆&]ブルース|ヒップホップ|hip.?hop|ラップ|エレクトロ|electronic|電子音|シンセ|synth|ダンスポップ|dance.?pop|\bpop.{0,16}dance.{0,16}(?:tune|track|song)\b|ジャズ|jazz|スウィング|即興|フォーク|folk|クラシック|classical|メタル|metal|オーケストラ|\borchestral\b|\borchestra\b|acoustic|アコースティック/i,
   },
   {
-    id: "mood_energy_tempo",
-    label: "雰囲気・勢い・テンポ",
-    search: "曲調 雰囲気 明るい 切ない 爽やか 勢い テンポ BPM mood energy tempo",
+    id: "mood",
+    category: "雰囲気",
+    label: "雰囲気",
+    search: "曲調 雰囲気 明るい 切ない 爽やか mood tone atmosphere",
     cues:
-      /明る|前向き|切な|胸が締め|悲し|穏やか|安ら|暗い|陰鬱|幻想|夢のよう|懐か|レトロ|コミカル|ユーモア|爽やか|清涼|温か|ぬくもり|緊張感|緊迫|しっとり|軽快|弾む|力強|激し|荒々し|疾走感|駆け抜け|ダンサブル|踊れる|重厚|ゆったり|スローテンポ|ミドルテンポ|アップテンポ|テンポ|\bbpm\b|\bbright\b|\bupbeat\b|\bmelanchol|\bsad\b|\bcalm\b|\bpeaceful\b|\bdark\b|\bdreamy\b|\bnostalgic\b|\brefreshing\b|\bwarm\b|\btense\b|\bgentle\b|\benergetic\b|\bfast tempo\b|\bslow tempo\b|\bmid[- ]tempo\b/i,
+      /曲調|雰囲気|明る|前向き|切な|胸が締め|悲し|穏やか|安ら|暗い|陰鬱|幻想|夢のよう|懐か|レトロ|コミカル|ユーモア|爽やか|清涼|温か|ぬくもり|緊張感|緊迫|\bmood\b|\btone\b|\batmosphere\b|\bbright\b|\bcheerful\b|\bquirky\b|\bcomical\b|\bhumorous\b|\bmelanchol|\bsad\b|\bcalm\b|\bpeaceful\b|\bdark\b|\bdreamy\b|\bnostalgic\b|\brefreshing\b|\bwarm\b|\btense\b/i,
   },
   {
-    id: "voice",
-    label: "歌声の構成と印象",
-    search: "歌声 歌唱 ボーカル 透明感 ハスキー whisper vocal timbre",
+    id: "energy",
+    category: "勢い",
+    label: "勢い",
+    search: "勢い 演奏 リズム ビート グルーヴ energy rhythm beat groove",
     cues:
-      /(歌声|歌唱|ボーカル|歌手|vocal|voice|singing).{0,50}(透明感|澄ん|透き通|柔らか|優し|力強|ささや|ハスキー|かすれ|human|synth|合成|コーラス|合唱|複数|clear|soft|powerful|whisper|husky|chorus|choir|synthetic)|(?:透明感|澄ん|透き通|柔らか|優し|力強|ささや|ハスキー|かすれ|clear|soft|powerful|whisper|husky).{0,50}(歌声|歌唱|ボーカル|歌手|vocal|voice|singing)/i,
+      /勢い|演奏|リズム|ビート|グルー[ヴブ]|しっとり|軽快|軽やか|弾む|力強|激し|荒々し|疾走感|駆け抜け|ダンサブル|踊れる|重厚|\benergy\b|\benergetic\b|\brhythm\b|\bbeat\b|\bgroove\b|\bdriving\b|\bjaunty\b|\brapid\b|\blively\b|\bbouncy\b|\bdanceable\b|\bintense\b|\bfierce\b|\bheavy\b/i,
+  },
+  {
+    id: "tempo",
+    category: "テンポ感",
+    label: "テンポ",
+    search: "テンポ BPM 速度 速い 遅い tempo BPM pace speed",
+    cues:
+      /テンポ|速度|速い|遅い|ゆったり|スローテンポ|ミドルテンポ|アップテンポ|\bbpm\b|\btempo\b|\bpace\b|\bspeed\b|\bfast\b|\bslow\b|\bquick\b|\brapid\b|\bup[- ]tempo\b|\bmid[- ]tempo\b/i,
+  },
+  {
+    id: "voice_structure",
+    category: "歌声の構成",
+    label: "歌声の構成",
+    search: "歌唱者 声種 複数ボーカル コーラス 合唱 インスト duet chorus choir vocal structure",
+    cues:
+      /人の歌声|人間(?:の)?歌唱|合成(?:音声|歌声|ボーカル|歌唱)|ボーカロイド|\bVOCALOID\b|\bSynthesizer\s*V\b|複数(?:人|名)?(?:の)?ボーカル|複数(?:人|名)?(?:が)?歌唱|デュエット|コーラス|合唱|インスト(?:ゥルメンタル)?|器楽曲|\bhuman vocals?\b|\bsynthetic vocals?\b|\bmultiple vocals?\b|\b(?:two|dual)\s+(?:vocalists?|singers?|voices?)\b|\bduet\b|\bchorus\b|\bchoir\b|\binstrumental(?: track| song)?\b/i,
+  },
+  {
+    id: "voice_impression",
+    category: "歌声の印象",
+    label: "歌声の印象",
+    search: "歌声 声質 透明感 ハスキー whisper vocal timbre voice quality",
+    cues:
+      /(歌声|歌唱|ボーカル|歌手|vocal(?:s)?|voice|singing).{0,60}(透明感|澄ん|透き通|柔らか|優し|力強|ささや|ハスキー|かすれ|声質|clear|transparent|soft|gentle|powerful|whisper|husky|raspy|timbre|tone quality)|(?:透明感|澄ん|透き通|柔らか|優し|力強|ささや|ハスキー|かすれ|声質|clear|transparent|soft|gentle|powerful|whisper|husky|raspy|timbre|tone quality).{0,60}(歌声|歌唱|ボーカル|歌手|vocal(?:s)?|voice|singing)/i,
   },
   {
     id: "lyric_theme",
+    category: "歌詞テーマ",
     label: "歌詞テーマ",
     search: "歌詞 内容 テーマ 恋愛 別れ 孤独 希望 lyrics theme meaning",
     cues:

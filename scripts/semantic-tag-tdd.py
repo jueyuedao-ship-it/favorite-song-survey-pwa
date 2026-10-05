@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-PHASE = "green-task2"
-TEST_COMMAND = "npx vitest run worker/tests/research-tagging.test.ts"
-COMMIT_MESSAGE = "feat: generate tag candidates by descriptor category"
+PHASE = "red-task3"
+TEST_COMMAND = (
+    'npx vitest run worker/tests/research-tagging.test.ts '
+    '-t "extremely-fast as semantic|jaunty rhythmic|seed-profile wording|hedged or unanchored|negated speed|mood from lyric-theme|bare vocalist credit"'
+)
 
 
 def write_env(name: str, value: str) -> None:
@@ -15,114 +17,283 @@ def write_env(name: str, value: str) -> None:
             handle.write(f"{name}={value}\n")
 
 
-def replace_once(text: str, old: str, new: str) -> str:
-    count = text.count(old)
-    if count != 1:
-        raise RuntimeError(f"expected one replacement target, found {count}: {old[:80]!r}")
-    return text.replace(old, new, 1)
+def append_once(path: Path, marker: str, addition: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    if marker not in text:
+        path.write_text(text.rstrip() + "\n\n" + addition.strip() + "\n", encoding="utf-8")
 
-
-providers_path = Path("worker/src/research/providers.ts")
-text = providers_path.read_text(encoding="utf-8")
-start_marker = "export function inferenceTagCandidates("
-end_marker = "\n\n/** Identity is atomic; enrichment claims are individually reviewed and filtered. */"
-start = text.index(start_marker)
-end = text.index(end_marker, start)
-replacement = r'''export function inferenceTagCandidates(
-  tags: { id: string; name: string; category?: string; criterion?: string }[],
-  evidence: Evidence[],
-  recording?: string | null,
-) {
-  const usable = evidence.filter(
-    (source) => !recording || linkedDescriptionRecording(source, recording),
-  );
-  const descriptive = usable.map(descriptiveLines).join("\n");
-  const supportedCategories = new Set(
-    descriptorSearchGroups
-      .filter((group) =>
-        usable.some((source) => group.cues.test(descriptiveLines(source).join("\n"))),
-      )
-      .map((group) => group.category),
-  );
-  const vocals = usable.some((source) =>
-    independentText(source)
-      .split(/\r?\n/)
-      .some((line) =>
-        creditClauses(line).some((claim) => claim.role === "vocalist"),
-      ),
-  );
-  const normalizedText = norm(descriptive);
-  return tags.filter((tag) => {
-    const group = descriptorSearchGroups.find(
-      (candidate) => candidate.category === tag.category,
-    );
-    if (group) {
-      if (tag.id === "tag-33" && vocals) return true;
-      return supportedCategories.has(group.category);
-    }
-    return [tag.name, ...criterionTerms(tag.criterion)].some(
-      (term) => norm(term).length > 1 && normalizedText.includes(norm(term)),
-    );
-  });
-}'''
-text = text[:start] + replacement + text[end:]
-
-compact_start = text.index("  const compactCriterion = (")
-compact_end = text.index("  const compactGuidance:", compact_start)
-compact_replacement = r'''  const compactCriterion = (tag: (typeof tagDefinitions)[number]) => {
-    const generic = `Webの説明・公式情報で「${tag.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
-    const criterion = typeof tag.criterion === "string" ? tag.criterion.trim() : "";
-    return {
-      id: tag.id,
-      name: tag.name,
-      category: tag.category,
-      ...(criterion && criterion !== generic
-        ? { criterion: criterion.length > 72 ? criterion.slice(0, 72) : criterion }
-        : {}),
-    };
-  };
-'''
-text = text[:compact_start] + compact_replacement + text[compact_end:]
-
-guidance_start = text.index("  const compactGuidance: Record<string, string> = {")
-guidance_end = text.index("  const update = () => {", guidance_start)
-guidance_replacement = r'''  const compactGuidance: Record<string, string> = {
-    ジャンル: "ジャンル/音楽特徴",
-    雰囲気: "曲調",
-    勢い: "演奏/ビート",
-    テンポ感: "速度/BPM",
-    歌声の構成: "声種/人数/構成",
-    歌声の印象: "歌声の声質",
-    歌詞テーマ: "歌詞内容",
-  };
-'''
-text = text[:guidance_start] + guidance_replacement + text[guidance_end:]
-
-budget_marker = '''  update();\n  while (requestTokenEstimate(body) > 7600) {'''
-budget_replacement = '''  update();\n  if (\n    requestTokenEstimate(body) > 7600 &&\n    input.tag_category_guidance &&\n    typeof input.tag_category_guidance === "object"\n  ) {\n    delete input.tag_category_guidance;\n    update();\n  }\n  while (requestTokenEstimate(body) > 7600) {'''
-text = replace_once(text, budget_marker, budget_replacement)
-providers_path.write_text(text, encoding="utf-8")
 
 test_path = Path("worker/tests/research-tagging.test.ts")
-tests = test_path.read_text(encoding="utf-8")
-tests = replace_once(
-    tests,
-    '''  expect(inferenceTagCandidates(tags, [source], recordingUrl).map((tag) => tag.id)).toEqual([\n    "tag-07",\n    "tag-32",\n    "tag-51",\n  ]);''',
-    '''  expect(inferenceTagCandidates(tags, [source], recordingUrl).map((tag) => tag.id)).toEqual([\n    "tag-01",\n    "tag-07",\n    "tag-32",\n    "tag-51",\n  ]);''',
+append_once(
+    test_path,
+    'it("accepts extremely-fast as semantic evidence for 速い"',
+    r'''
+it("accepts extremely-fast as semantic evidence for 速い", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const quote = "The track runs at an extremely-fast pace with pitter-pattering drums.";
+  const source = { ...primarySource, content: `${primarySource.content}\n\n${quote}` };
+  const tag = {
+    id: "tag-32",
+    name: "速い",
+    category: "テンポ感",
+    criterion: "速いテンポと説明される。",
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "蜃気楼",
+        reference_url: recordingUrl,
+        kind: "original",
+        source_id: "s0",
+        quote: "tayori - 蜃気楼 (Official Video)",
+        credits: [],
+        tags: [{
+          tag_id: tag.id,
+          source_id: "s0",
+          quote,
+          reasoning:
+            "The extremely-fast pace directly entails the selected 速い tempo criterion for this track.",
+        }],
+      }],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+
+  expect(analysis.recordings[0].tags).toMatchObject([
+    { tag_id: "tag-32", evidence_type: "semantic_inference" },
+  ]);
+  expect(analysis.review_warnings).toEqual([]);
+});
+
+it("accepts jaunty rhythmic evidence for 軽快 without a seed-regex match", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const quote = "The song moves with a jaunty, springing rhythm throughout the performance.";
+  const source = { ...primarySource, content: `${primarySource.content}\n\n${quote}` };
+  const tag = {
+    id: "tag-24",
+    name: "軽快",
+    category: "勢い",
+    criterion: "軽やかで弾むリズム。",
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "蜃気楼",
+        reference_url: recordingUrl,
+        kind: "original",
+        source_id: "s0",
+        quote: "tayori - 蜃気楼 (Official Video)",
+        credits: [],
+        tags: [{
+          tag_id: tag.id,
+          source_id: "s0",
+          quote,
+          reasoning:
+            "The jaunty springing rhythm entails the 軽快 tag by describing a light, lively rhythmic performance.",
+        }],
+      }],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+
+  expect(analysis.recordings[0].tags).toMatchObject([
+    { tag_id: "tag-24", evidence_type: "semantic_inference" },
+  ]);
+});
+
+it("marks explicit seed-profile wording as direct evidence", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const quote = "The song has a fast tempo throughout the arrangement.";
+  const source = { ...primarySource, content: `${primarySource.content}\n\n${quote}` };
+  const tag = {
+    id: "tag-32",
+    name: "速い",
+    category: "テンポ感",
+    criterion: "速いテンポと説明される。",
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "蜃気楼",
+        reference_url: recordingUrl,
+        kind: "original",
+        source_id: "s0",
+        quote: "tayori - 蜃気楼 (Official Video)",
+        credits: [],
+        tags: [{
+          tag_id: tag.id,
+          source_id: "s0",
+          quote,
+          reasoning: "The explicit fast tempo wording directly satisfies the selected 速い tempo criterion.",
+        }],
+      }],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+
+  expect(analysis.recordings[0].tags).toMatchObject([
+    { tag_id: "tag-32", evidence_type: "direct" },
+  ]);
+});
+
+it("rejects hedged or unanchored semantic reasoning", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const quote = "The track runs at an extremely-fast pace with pitter-pattering drums.";
+  const source = { ...primarySource, content: `${primarySource.content}\n\n${quote}` };
+  const tag = {
+    id: "tag-32",
+    name: "速い",
+    category: "テンポ感",
+    criterion: "速いテンポと説明される。",
+  };
+  const recording = (reasoning: string) => ({
+    title: "蜃気楼",
+    reference_url: recordingUrl,
+    kind: "original",
+    source_id: "s0",
+    quote: "tayori - 蜃気楼 (Official Video)",
+    credits: [],
+    tags: [{ tag_id: tag.id, source_id: "s0", quote, reasoning }],
+  });
+  const hedged = supportedAnalysis(
+    JSON.stringify({
+      recordings: [recording("The pace maybe indicates the selected 速い tempo tag, but the evidence is uncertain.")],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+  const unanchored = supportedAnalysis(
+    JSON.stringify({
+      recordings: [recording("The exact quote gives a concrete tempo description for the recording and its performance.")],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+
+  expect(hedged.recordings[0].tags).toEqual([]);
+  expect(unanchored.recordings[0].tags).toEqual([]);
+});
+
+it("rejects negated speed evidence", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const quote = "The track is not fast in pace despite the frantic visual editing.";
+  const source = { ...primarySource, content: `${primarySource.content}\n\n${quote}` };
+  const tag = {
+    id: "tag-32",
+    name: "速い",
+    category: "テンポ感",
+    criterion: "速いテンポと説明される。",
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "蜃気楼",
+        reference_url: recordingUrl,
+        kind: "original",
+        source_id: "s0",
+        quote: "tayori - 蜃気楼 (Official Video)",
+        credits: [],
+        tags: [{
+          tag_id: tag.id,
+          source_id: "s0",
+          quote,
+          reasoning: "The sentence discusses speed, but its negated wording cannot establish the 速い tempo tag.",
+        }],
+      }],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+
+  expect(analysis.recordings[0].tags).toEqual([]);
+});
+
+it("does not infer mood from lyric-theme evidence", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const quote = "The lyrics describe a bright future and cheerful hope after hardship.";
+  const source = { ...primarySource, content: `${primarySource.content}\n\n${quote}` };
+  const tag = {
+    id: "tag-13",
+    name: "明るい",
+    category: "雰囲気",
+    criterion: "明るく前向きな曲調。",
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "蜃気楼",
+        reference_url: recordingUrl,
+        kind: "original",
+        source_id: "s0",
+        quote: "tayori - 蜃気楼 (Official Video)",
+        credits: [],
+        tags: [{
+          tag_id: tag.id,
+          source_id: "s0",
+          quote,
+          reasoning: "The bright lyrical idea would otherwise appear related to the 明るい mood tag.",
+        }],
+      }],
+    }),
+    [source],
+    query,
+    [tag],
+  );
+
+  expect(analysis.recordings[0].tags).toEqual([]);
+});
+
+it("does not infer voice impression from a bare vocalist credit", async () => {
+  const { supportedAnalysis } = await import("../src/research/providers");
+  const tag = {
+    id: "tag-38",
+    name: "透明感",
+    category: "歌声の印象",
+    criterion: "澄んだ透明な歌声の具体的な記述。",
+  };
+  const analysis = supportedAnalysis(
+    JSON.stringify({
+      recordings: [{
+        title: "蜃気楼",
+        reference_url: recordingUrl,
+        kind: "original",
+        source_id: "s0",
+        quote: "tayori - 蜃気楼 (Official Video)",
+        credits: [{
+          name: "isui",
+          kind: "person",
+          role: "vocalist",
+          source_id: "s0",
+          quote: "Vocal: isui",
+          aliases: [],
+        }],
+        tags: [{
+          tag_id: tag.id,
+          source_id: "s0",
+          quote: "Vocal: isui",
+          reasoning: "The vocalist credit alone should not establish the 透明感 voice-impression tag.",
+        }],
+      }],
+    }),
+    [primarySource],
+    query,
+    [tag],
+  );
+
+  expect(analysis.recordings[0].tags).toEqual([]);
+});
+''',
 )
-tests = replace_once(
-    tests,
-    '''  expect(input.tags.map((tag: any) => tag.id)).not.toContain("tag-50");''',
-    '''  expect(input.tags.map((tag: any) => tag.id)).toContain("tag-50");\n  expect(input.tags.map((tag: any) => tag.id)).not.toContain("tag-34");''',
-)
-tests = replace_once(
-    tests,
-    '''  expect(inferenceTagCandidates(tags, revalidated, scatmanUrl).map((tag) => tag.id)).toEqual([\n    "tag-07",\n    "tag-08",\n  ]);''',
-    '''  expect(inferenceTagCandidates(tags, revalidated, scatmanUrl).map((tag) => tag.id)).toEqual([\n    "tag-07",\n    "tag-08",\n    "tag-03",\n  ]);''',
-)
-test_path.write_text(tests, encoding="utf-8")
 
 write_env("SEMANTIC_PHASE", PHASE)
 write_env("SEMANTIC_TEST_COMMAND", TEST_COMMAND)
-write_env("SEMANTIC_COMMIT_MESSAGE", COMMIT_MESSAGE)
 print(f"semantic-tag TDD phase: {PHASE}")

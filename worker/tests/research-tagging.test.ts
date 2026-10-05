@@ -987,6 +987,7 @@ it("packs only tag definitions with matching evidence while retaining custom def
   ];
 
   expect(inferenceTagCandidates(tags, [source], recordingUrl).map((tag) => tag.id)).toEqual([
+    "tag-01",
     "tag-07",
     "tag-32",
     "tag-51",
@@ -1580,7 +1581,8 @@ it("fits a real-shaped 50-tag request without losing the associated article or i
       "tag-47",
     ]),
   );
-  expect(input.tags.map((tag: any) => tag.id)).not.toContain("tag-50");
+  expect(input.tags.map((tag: any) => tag.id)).toContain("tag-50");
+  expect(input.tags.map((tag: any) => tag.id)).not.toContain("tag-34");
 });
 
 it("accepts a specific English rationale for Japanese lyric-theme evidence without requiring literal tag repetition", async () => {
@@ -2140,6 +2142,7 @@ it("does not import genre evidence from another named song later in the same par
   expect(inferenceTagCandidates(tags, revalidated, scatmanUrl).map((tag) => tag.id)).toEqual([
     "tag-07",
     "tag-08",
+    "tag-03",
   ]);
 });
 

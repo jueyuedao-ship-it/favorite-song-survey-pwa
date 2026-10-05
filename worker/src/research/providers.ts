@@ -1442,22 +1442,24 @@ export function fitInferenceRequest(body: any, evidence: Evidence[]) {
     sources.splice(lowValueIndex(), 1);
   const compactCriterion = (tag: (typeof tagDefinitions)[number]) => {
     const generic = `Webの説明・公式情報で「${tag.name}」を裏付ける具体的な根拠がある場合のみ付与。曲名や作者名から推測しない。`;
-    return tag.criterion === generic
-      ? {
-          ...tag,
-          criterion: `${tag.name}についてWebで具体的な根拠を確認。曲名や作者名から推測しない。`,
-        }
-      : tag;
+    const criterion = typeof tag.criterion === "string" ? tag.criterion.trim() : "";
+    return {
+      id: tag.id,
+      name: tag.name,
+      category: tag.category,
+      ...(criterion && criterion !== generic
+        ? { criterion: criterion.length > 72 ? criterion.slice(0, 72) : criterion }
+        : {}),
+    };
   };
   const compactGuidance: Record<string, string> = {
-    ジャンル:
-      "明示ジャンルか具体的な音楽特徴。旋律だけでJ-POP、楽器名だけでジャズ/クラシックとしない。",
-    雰囲気: "曲調の説明で判断。歌詞だけで推測しない。",
-    勢い: "演奏やビートの具体描写で判断。",
-    テンポ感: "速度やBPMの明示で判断。",
-    歌声の構成: "声種・人数・コーラス・インストの明示を確認。",
-    歌声の印象: "透明感等は歌声自体の記述で確認。",
-    歌詞テーマ: "歌詞内容の説明で判断。単語だけで推測しない。",
+    ジャンル: "ジャンル/音楽特徴",
+    雰囲気: "曲調",
+    勢い: "演奏/ビート",
+    テンポ感: "速度/BPM",
+    歌声の構成: "声種/人数/構成",
+    歌声の印象: "歌声の声質",
+    歌詞テーマ: "歌詞内容",
   };
   const update = () => {
     const candidates = inferenceTagCandidates(
@@ -1547,6 +1549,14 @@ export function fitInferenceRequest(body: any, evidence: Evidence[]) {
     body.messages[1].content = JSON.stringify(input);
   };
   update();
+  if (
+    requestTokenEstimate(body) > 7600 &&
+    input.tag_category_guidance &&
+    typeof input.tag_category_guidance === "object"
+  ) {
+    delete input.tag_category_guidance;
+    update();
+  }
   while (requestTokenEstimate(body) > 7600) {
     const removable = lowValueIndex();
     if (removable >= 0 && sources.length > 1) {
@@ -2228,21 +2238,30 @@ export function inferenceTagCandidates(
   const usable = evidence.filter(
     (source) => !recording || linkedDescriptionRecording(source, recording),
   );
-  const prose = usable.map((source) => independentText(source)).join("\n");
   const descriptive = usable.map(descriptiveLines).join("\n");
-  const vocals = usable.some((source) =>
-    independentText(source).split(/\r?\n/).some((line) =>
-      creditClauses(line).some((claim) => claim.role === "vocalist"),
-    ),
+  const supportedCategories = new Set(
+    descriptorSearchGroups
+      .filter((group) =>
+        usable.some((source) => group.cues.test(descriptiveLines(source).join("\n"))),
+      )
+      .map((group) => group.category),
   );
+  const vocals = usable.some((source) =>
+    independentText(source)
+      .split(/\r?\n/)
+      .some((line) =>
+        creditClauses(line).some((claim) => claim.role === "vocalist"),
+      ),
+  );
+  const normalizedText = norm(descriptive);
   return tags.filter((tag) => {
-    const profile = trustedSeedProfile(tag);
-    const isUnchangedSeed = Boolean(profile);
-    if (isUnchangedSeed && profile) {
+    const group = descriptorSearchGroups.find(
+      (candidate) => candidate.category === tag.category,
+    );
+    if (group) {
       if (tag.id === "tag-33" && vocals) return true;
-      return profile.test(descriptive) && !tagEvidenceNegated(descriptive, profile);
+      return supportedCategories.has(group.category);
     }
-    const normalizedText = norm(descriptive);
     return [tag.name, ...criterionTerms(tag.criterion)].some(
       (term) => norm(term).length > 1 && normalizedText.includes(norm(term)),
     );

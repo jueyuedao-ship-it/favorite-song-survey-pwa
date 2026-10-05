@@ -1,0 +1,62 @@
+name: Semantic tag TDD
+
+on:
+  push:
+    branches: [feat/semantic-tag-candidates]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: semantic-tag-tdd
+  cancel-in-progress: false
+
+jobs:
+  tdd:
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/semantic-tag-candidates
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run setup:ci
+      - name: Apply TDD phase patch
+        run: python scripts/semantic-tag-tdd.py
+      - run: git diff --check
+      - name: Persist RED tests before running them
+        if: ${{ startsWith(env.SEMANTIC_PHASE, 'red-') }}
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add worker/tests/research-tagging.test.ts
+          if ! git diff --cached --quiet; then
+            git commit -m "test: add semantic tag regression coverage [skip ci]"
+            git push origin HEAD:feat/semantic-tag-candidates
+          fi
+      - name: Run phase tests
+        run: bash -lc "$SEMANTIC_TEST_COMMAND"
+      - name: Persist GREEN implementation
+        if: ${{ startsWith(env.SEMANTIC_PHASE, 'green-') }}
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add worker/src/research/providers.ts worker/src/research/runner.ts worker/tests/research-tagging.test.ts
+          if ! git diff --cached --quiet; then
+            git commit -m "$SEMANTIC_COMMIT_MESSAGE [skip ci]"
+            git push origin HEAD:feat/semantic-tag-candidates
+          fi
+      - name: Full test suite
+        if: ${{ env.SEMANTIC_PHASE == 'final-verify' }}
+        run: npm test
+      - name: Typecheck
+        if: ${{ env.SEMANTIC_PHASE == 'final-verify' }}
+        run: npm run typecheck
+      - name: Full build
+        if: ${{ env.SEMANTIC_PHASE == 'final-verify' }}
+        run: npm run build
